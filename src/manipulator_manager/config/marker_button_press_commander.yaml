@@ -31,7 +31,7 @@ marker_button_press_commander:
     # =========================================================
     # Position tolerance
     # =========================================================
-    position_tolerance_m: 0.01
+    position_tolerance_m: 0.005
     press_position_tolerance_m: 0.004
 
     # =========================================================
@@ -56,7 +56,7 @@ marker_button_press_commander:
     # marker 위치에서 실제 버튼 목표점을 보정
     button_offset_x: 0.003
     button_offset_y: -0.03
-    button_offset_z: 0.007
+    button_offset_z: 0.008
 
     # link1 기준 실제 버튼을 누르는 방향에 맞춰 조정
     press_axis: "-x"
