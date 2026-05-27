@@ -25,12 +25,62 @@ def get_launch_file(package_name: str, launch_file_name: str) -> str:
     )
 
 
+def get_first_existing_config(package_share: str, candidates: list[str]) -> str:
+    """
+    Return the first existing config path.
+
+    This keeps the all-in-one launch tolerant to small filename differences
+    between task-manager config files.
+    """
+    for filename in candidates:
+        path = os.path.join(package_share, 'config', filename)
+        if os.path.exists(path):
+            return path
+
+    return os.path.join(package_share, 'config', candidates[0])
+
+
 def generate_launch_description():
+    # =========================================================
+    # Package share paths
+    # =========================================================
+    manipulator_manager_share = get_package_share_directory('manipulator_manager')
+
+    # =========================================================
+    # Default config paths for manipulator task system
+    # =========================================================
+    default_arm_config = get_first_existing_config(
+        manipulator_manager_share,
+        [
+            'arm_pose_commander.yaml',
+        ]
+    )
+
+    default_button_config = get_first_existing_config(
+        manipulator_manager_share,
+        [
+            'marker_button_press_commander.yaml',
+        ]
+    )
+
+    default_task_config = get_first_existing_config(
+        manipulator_manager_share,
+        [
+            'manipulator_task_manager.yaml',
+            'task_manager.yaml',
+            'manipulator_task_system.yaml',
+        ]
+    )
+
     # =========================================================
     # Launch arguments
     # =========================================================
     button_plan_only = LaunchConfiguration('button_plan_only')
     unload_wait_for_result = LaunchConfiguration('unload_wait_for_result')
+
+    arm_config = LaunchConfiguration('arm_config')
+    button_config = LaunchConfiguration('button_config')
+    task_config = LaunchConfiguration('task_config')
 
     declare_button_plan_only = DeclareLaunchArgument(
         'button_plan_only',
@@ -41,6 +91,24 @@ def generate_launch_description():
     declare_unload_wait_for_result = DeclareLaunchArgument(
         'unload_wait_for_result',
         default_value='true',
+        description='Forwarded only to manipulator_task_system.launch.py'
+    )
+
+    declare_arm_config = DeclareLaunchArgument(
+        'arm_config',
+        default_value=default_arm_config,
+        description='Forwarded only to manipulator_task_system.launch.py'
+    )
+
+    declare_button_config = DeclareLaunchArgument(
+        'button_config',
+        default_value=default_button_config,
+        description='Forwarded only to manipulator_task_system.launch.py'
+    )
+
+    declare_task_config = DeclareLaunchArgument(
+        'task_config',
+        default_value=default_task_config,
         description='Forwarded only to manipulator_task_system.launch.py'
     )
 
@@ -76,10 +144,10 @@ def generate_launch_description():
     # Include launch files with scoped contexts
     # =========================================================
     # NOTE:
-    # - Each included launch is wrapped in GroupAction(scoped=True).
-    # - The camera perception launch is additionally wrapped with forwarding=False
-    #   so unrelated launch arguments from MoveIt/task system do not leak into
-    #   realsense2_camera/rs_launch.py.
+    # - MoveIt and task system are scoped to reduce launch configuration leakage.
+    # - Camera perception uses forwarding=False so arguments such as arm_config,
+    #   button_config, task_config, button_plan_only, and unload_wait_for_result
+    #   do not leak into realsense2_camera/rs_launch.py.
     moveit_core_group = GroupAction(
         scoped=True,
         actions=[
@@ -97,6 +165,9 @@ def generate_launch_description():
                 launch_arguments={
                     'button_plan_only': button_plan_only,
                     'unload_wait_for_result': unload_wait_for_result,
+                    'arm_config': arm_config,
+                    'button_config': button_config,
+                    'task_config': task_config,
                 }.items()
             )
         ]
@@ -123,6 +194,9 @@ def generate_launch_description():
     return LaunchDescription([
         declare_button_plan_only,
         declare_unload_wait_for_result,
+        declare_arm_config,
+        declare_button_config,
+        declare_task_config,
 
         LogInfo(msg='🚀 Launching manipulator all-in-one system'),
 
