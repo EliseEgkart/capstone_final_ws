@@ -56,6 +56,7 @@ setup(
             'elevator_delivery_manager2 = amr_navigator.elevator_delivery_manager2:main',
             'elevator_delivery_final = amr_navigator.elevator_delivery_final:main',
             'elevator_delivery_final_with_manipulator = amr_navigator.elevator_delivery_final_with_manipulator:main',
+            'elevator_manager_final_with_manipulator = amr_navigator.elevator_manager_final_with_manipulator:main',
         ],
     },
 )
