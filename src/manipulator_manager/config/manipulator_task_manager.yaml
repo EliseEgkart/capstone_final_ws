@@ -43,7 +43,7 @@ manipulator_task_manager:
     return_home_after_unload: true
 
     # arm_pose_commander reaches scan pose, then wait briefly for marker refresh
-    marker_settle_sec: 0.5
+    marker_settle_sec: 3.0
 
     # =========================================================
     # Timeout
