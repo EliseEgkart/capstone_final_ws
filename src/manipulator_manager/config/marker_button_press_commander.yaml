@@ -46,7 +46,7 @@ marker_button_press_commander:
     plan_only: false
 
     # go 명령용 단순 offset
-    offset_x: 0.0
+    offset_x: 0.005
     offset_y: 0.0
     offset_z: 0.0
 
@@ -59,7 +59,7 @@ marker_button_press_commander:
     button_offset_z: 0.011
 
     # link1 기준 실제 버튼을 누르는 방향에 맞춰 조정
-    press_axis: "-x"
+    press_axis: "x"
 
     approach_distance_m: 0.05
     press_depth_m: 0.000
