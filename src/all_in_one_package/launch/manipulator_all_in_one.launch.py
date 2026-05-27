@@ -5,7 +5,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
-    GroupAction,
+    ExecuteProcess,
     IncludeLaunchDescription,
     LogInfo,
     TimerAction,
@@ -26,12 +26,7 @@ def get_launch_file(package_name: str, launch_file_name: str) -> str:
 
 
 def get_first_existing_config(package_share: str, candidates: list[str]) -> str:
-    """
-    Return the first existing config path.
-
-    This keeps the all-in-one launch tolerant to small filename differences
-    between task-manager config files.
-    """
+    """Return the first existing config path from package_share/config."""
     for filename in candidates:
         path = os.path.join(package_share, 'config', filename)
         if os.path.exists(path):
@@ -77,7 +72,6 @@ def generate_launch_description():
     # =========================================================
     button_plan_only = LaunchConfiguration('button_plan_only')
     unload_wait_for_result = LaunchConfiguration('unload_wait_for_result')
-
     arm_config = LaunchConfiguration('arm_config')
     button_config = LaunchConfiguration('button_config')
     task_config = LaunchConfiguration('task_config')
@@ -125,9 +119,41 @@ def generate_launch_description():
         'manipulator_task_system.launch.py'
     )
 
-    perception_launch_path = get_launch_file(
-        'camera_perception_pkg',
-        'manipulator_perception.launch.py'
+    # =========================================================
+    # Include launch files
+    # =========================================================
+    moveit_core_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(moveit_core_launch_path)
+    )
+
+    task_system_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(task_system_launch_path),
+        launch_arguments={
+            'button_plan_only': button_plan_only,
+            'unload_wait_for_result': unload_wait_for_result,
+            'arm_config': arm_config,
+            'button_config': button_config,
+            'task_config': task_config,
+        }.items()
+    )
+
+    # =========================================================
+    # Camera perception launch as an isolated process
+    # =========================================================
+    # NOTE:
+    # - This intentionally uses ExecuteProcess instead of IncludeLaunchDescription.
+    # - It prevents all parent launch arguments such as button_plan_only,
+    #   unload_wait_for_result, arm_config, button_config, and task_config
+    #   from leaking into camera_perception_pkg/manipulator_perception.launch.py
+    #   and then into realsense2_camera/rs_launch.py.
+    camera_perception_process = ExecuteProcess(
+        cmd=[
+            'ros2',
+            'launch',
+            'camera_perception_pkg',
+            'manipulator_perception.launch.py',
+        ],
+        output='screen'
     )
 
     # =========================================================
@@ -138,49 +164,6 @@ def generate_launch_description():
         executable='elevator_delivery_final_with_manipulator',
         name='elevator_delivery_final_with_manipulator',
         output='screen'
-    )
-
-    # =========================================================
-    # Include launch files with scoped contexts
-    # =========================================================
-    # NOTE:
-    # - MoveIt and task system are scoped to reduce launch configuration leakage.
-    # - Camera perception uses forwarding=False so arguments such as arm_config,
-    #   button_config, task_config, button_plan_only, and unload_wait_for_result
-    #   do not leak into realsense2_camera/rs_launch.py.
-    moveit_core_group = GroupAction(
-        scoped=True,
-        actions=[
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(moveit_core_launch_path)
-            )
-        ]
-    )
-
-    task_system_group = GroupAction(
-        scoped=True,
-        actions=[
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(task_system_launch_path),
-                launch_arguments={
-                    'button_plan_only': button_plan_only,
-                    'unload_wait_for_result': unload_wait_for_result,
-                    'arm_config': arm_config,
-                    'button_config': button_config,
-                    'task_config': task_config,
-                }.items()
-            )
-        ]
-    )
-
-    perception_group = GroupAction(
-        scoped=True,
-        forwarding=False,
-        actions=[
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(perception_launch_path)
-            )
-        ]
     )
 
     # =========================================================
@@ -198,13 +181,13 @@ def generate_launch_description():
         declare_button_config,
         declare_task_config,
 
-        LogInfo(msg='🚀 Launching manipulator all-in-one system'),
+        LogInfo(msg='[all_in_one] Launching manipulator all-in-one system'),
 
         TimerAction(
             period=0.0,
             actions=[
                 LogInfo(msg='[all_in_one] Starting MoveIt core...'),
-                moveit_core_group,
+                moveit_core_launch,
             ]
         ),
 
@@ -212,15 +195,15 @@ def generate_launch_description():
             period=3.0,
             actions=[
                 LogInfo(msg='[all_in_one] Starting manipulator task system...'),
-                task_system_group,
+                task_system_launch,
             ]
         ),
 
         TimerAction(
             period=5.0,
             actions=[
-                LogInfo(msg='[all_in_one] Starting camera perception...'),
-                perception_group,
+                LogInfo(msg='[all_in_one] Starting camera perception as isolated process...'),
+                camera_perception_process,
             ]
         ),
 
