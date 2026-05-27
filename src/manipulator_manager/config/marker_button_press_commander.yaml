@@ -4,11 +4,7 @@ marker_button_press_commander:
     # Input / command / result topics
     # =========================================================
     marker_topic: /object_3d_marker
-
-    # task_manager가 이 토픽으로 press/cancel/status/clear 명령을 보냄
     cmd_topic: /marker_button_press_commander/cmd
-
-    # task_manager가 이 토픽에서 button_press_done / failed / cancelled를 받음
     result_topic: /marker_button_press_commander/result
     state_topic: /marker_button_press_commander/state
 
@@ -42,31 +38,35 @@ marker_button_press_commander:
     allowed_planning_time_sec: 3.0
     num_planning_attempts: 5
 
-    # true로 두면 계획만 하고 실행하지 않음
     plan_only: false
 
-    # go 명령용 단순 offset
-    offset_x: 0.005
-    offset_y: 0.0
-    offset_z: 0.0
+    # =========================================================
+    # Offset mode
+    # =========================================================
+    default_offset_mode: outside
+
+    outside_offset_x: 0.050
+    outside_offset_y: 0.000
+    outside_offset_z: 0.000
+
+    inside_offset_x: 0.025
+    inside_offset_y: -0.015
+    inside_offset_z: 0.005
 
     # =========================================================
     # Button press tuning
     # =========================================================
-    # marker 위치에서 실제 버튼 목표점을 보정
-    button_offset_x: 0.008
-    button_offset_y: -0.01
-    button_offset_z: 0.011
+    button_offset_x: 0.000
+    button_offset_y: 0.000
+    button_offset_z: 0.000
 
-    # link1 기준 실제 버튼을 누르는 방향에 맞춰 조정
-    press_axis: "x"
+    press_axis: "-x"
 
     approach_distance_m: 0.05
     press_depth_m: 0.000
     retreat_distance_m: 0.05
     press_hold_sec: 0.3
 
-    # press를 여러 작은 목표로 쪼개어 더 부드럽게 누름
     press_intermediate_steps: 2
 
     approach_velocity_scaling: 0.15
@@ -85,7 +85,6 @@ marker_button_press_commander:
     goal_qz: 0.0
     goal_qw: 1.0
 
-    # 처음에는 0.5, 이후 실제 버튼 방향에 맞으면 0.3 -> 0.2로 줄이기
     ori_tol_x: 3.14
     ori_tol_y: 3.14
     ori_tol_z: 3.14

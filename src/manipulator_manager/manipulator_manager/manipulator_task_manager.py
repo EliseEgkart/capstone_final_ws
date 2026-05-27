@@ -20,6 +20,7 @@ Internal:
 
   task_manager -> marker_button_press_commander:
     /marker_button_press_commander/cmd std_msgs/msg/String
+      press_outside, press_inside, clear, cancel, status
 
   marker_button_press_commander -> task_manager:
     /marker_button_press_commander/result std_msgs/msg/String
@@ -87,6 +88,8 @@ ARM_CANCEL = "cancel"
 ARM_STATUS = "status"
 
 BUTTON_PRESS = "press"
+BUTTON_PRESS_OUTSIDE = "press_outside"
+BUTTON_PRESS_INSIDE = "press_inside"
 BUTTON_CLEAR = "clear"
 BUTTON_CANCEL = "cancel"
 BUTTON_STATUS = "status"
@@ -102,10 +105,10 @@ class ManipulatorTaskManager(Node):
 
     Main sequences:
       1. OUTSIDE_BTN_FRONT:
-         clear marker -> outside_scan -> press -> home -> OUTSIDE_BTN_DONE
+         clear marker -> outside_scan -> press_outside -> home -> OUTSIDE_BTN_DONE
 
       2. INSIDE_BTN_FRONT:
-         clear marker -> inside_scan -> press -> home -> INSIDE_BTN_DONE
+         clear marker -> inside_scan -> press_inside -> home -> INSIDE_BTN_DONE
 
       3. DESTINATION_UNLOAD:
          unload command to MCU -> wait or delay -> optional home -> UNLOAD_DONE
@@ -360,6 +363,10 @@ class ManipulatorTaskManager(Node):
             f"[task_manager] perception_target_topic={self.perception_target_topic}"
         )
         self.get_logger().info(f"[task_manager] mcu_cmd_topic={self.mcu_cmd_topic}")
+        self.get_logger().info(
+            "[task_manager] button press command mapping: "
+            f"outside={BUTTON_PRESS_OUTSIDE}, inside={BUTTON_PRESS_INSIDE}"
+        )
         self.get_logger().info(
             "[task_manager] commands: "
             "OUTSIDE_BTN_FRONT, INSIDE_BTN_FRONT, INSIDE_B1_BTN_FRONT, "
@@ -635,10 +642,30 @@ class ManipulatorTaskManager(Node):
         # Marker settle is short, but keep a safe timeout.
         self._set_deadline(max(2.0, self.marker_settle_sec + 1.0))
 
+    def _button_press_cmd_for_state(self, state: str) -> str:
+        """Return marker_button_press_commander command for the current button task."""
+        if state == "OUTSIDE_PRESSING" or self._active_task == CMD_OUTSIDE_BTN_FRONT:
+            return BUTTON_PRESS_OUTSIDE
+
+        if state == "INSIDE_PRESSING" or self._active_task in (
+            CMD_INSIDE_BTN_FRONT,
+            CMD_INSIDE_B1_BTN_FRONT,
+            CMD_INSIDE_3F_BTN_FRONT,
+        ):
+            return BUTTON_PRESS_INSIDE
+
+        return BUTTON_PRESS
+
     def _start_button_press(self, state: str) -> None:
         self._set_state(state)
         self._set_deadline(self.button_press_timeout_sec)
-        self._publish_button_cmd(BUTTON_PRESS)
+
+        button_cmd = self._button_press_cmd_for_state(state)
+        self.get_logger().info(
+            f"[task_manager] selected button command='{button_cmd}' "
+            f"for state={state}, active_task={self._active_task}"
+        )
+        self._publish_button_cmd(button_cmd)
 
     def _finish_button_attempt(self, homing_state: str, done_result: str) -> None:
         """
@@ -834,6 +861,7 @@ class ManipulatorTaskManager(Node):
             f"UNLOAD_WAIT_FOR_RESULT={self.unload_wait_for_result},"
             f"PENDING_RESULT_AFTER_HOME={self._pending_result_after_home},"
             f"CURRENT_BUTTON_DONE_RESULT={self._current_button_done_result},"
+            f"BUTTON_CMD_FOR_ACTIVE_STATE={self._button_press_cmd_for_state(self._state)},"
             f"PERCEPTION_TARGET_TOPIC={self.perception_target_topic}"
         )
         self._publish_result(status)

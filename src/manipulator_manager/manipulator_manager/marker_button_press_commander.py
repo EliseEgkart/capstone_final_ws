@@ -7,7 +7,7 @@ marker_button_press_commander.py
 핵심 로직:
   - /object_3d_marker의 마지막 Marker 1개만 사용
   - Marker를 target_frame으로 TF 변환
-  - offset_x/y/z를 더한 단일 목표점 생성
+  - 명령에 따라 outside/inside offset을 선택해 단일 목표점 생성
   - PositionConstraint + OrientationConstraint를 항상 같이 사용
   - MoveGroup action goal 1개만 전송
   - 성공 시:
@@ -19,7 +19,7 @@ marker_button_press_commander.py
 
 주의:
   - 기존 APPROACH -> PRESS -> HOLD -> RETREAT 분할 방식은 사용하지 않는다.
-  - 버튼 누르기 깊이/방향은 press_axis, press_depth가 아니라 offset_x/y/z로 조정한다.
+  - 버튼 누르기 깊이/방향은 press_axis, press_depth가 아니라 outside/inside offset으로 조정한다.
   - home 복귀는 manipulator_task_manager.py가 담당한다.
 """
 
@@ -77,14 +77,31 @@ class MarkerButtonPressCommander(Node):
         self.declare_parameter("allowed_planning_time_sec", 3.0)
         self.declare_parameter("num_planning_attempts", 5)
 
-        # 잘 되던 코드의 핵심 보정값.
-        # 버튼을 더 깊게 누르고 싶으면 실제 누르는 축 방향으로 offset을 조정한다.
+        # =========================================================
+        # Offset parameters
+        # =========================================================
+        # Legacy offset_* parameters are kept for backward compatibility.
+        # If outside_offset_* is not configured, outside mode falls back to offset_*.
         self.declare_parameter("offset_x", 0.0)
         self.declare_parameter("offset_y", 0.0)
         self.declare_parameter("offset_z", 0.0)
 
-        # 기존 YAML 호환용 alias.
-        # button_offset_* 값이 0이 아니면 offset_* 대신 사용할 수 있도록 지원한다.
+        # New mode-based offsets.
+        # - press_outside uses outside_offset_*
+        # - press_inside uses inside_offset_*
+        # - press uses default_offset_mode
+        self.declare_parameter("default_offset_mode", "outside")
+        self.declare_parameter("outside_offset_x", 0.0)
+        self.declare_parameter("outside_offset_y", 0.0)
+        self.declare_parameter("outside_offset_z", 0.0)
+        self.declare_parameter("inside_offset_x", 0.0)
+        self.declare_parameter("inside_offset_y", 0.0)
+        self.declare_parameter("inside_offset_z", 0.0)
+
+        # Additional fine correction applied after outside/inside offset selection.
+        # prefer_button_offset is kept for legacy compatibility:
+        #   true  -> use button_offset_* only
+        #   false -> use selected mode offset + button_offset_*
         self.declare_parameter("button_offset_x", 0.0)
         self.declare_parameter("button_offset_y", 0.0)
         self.declare_parameter("button_offset_z", 0.0)
@@ -141,10 +158,37 @@ class MarkerButtonPressCommander(Node):
         self.offset_x = float(self.get_parameter("offset_x").value)
         self.offset_y = float(self.get_parameter("offset_y").value)
         self.offset_z = float(self.get_parameter("offset_z").value)
+        self.legacy_offset = (self.offset_x, self.offset_y, self.offset_z)
+
+        self.default_offset_mode = self._normalize_offset_mode(
+            str(self.get_parameter("default_offset_mode").value)
+        )
+
+        self.outside_offset = (
+            float(self.get_parameter("outside_offset_x").value),
+            float(self.get_parameter("outside_offset_y").value),
+            float(self.get_parameter("outside_offset_z").value),
+        )
+
+        self.inside_offset = (
+            float(self.get_parameter("inside_offset_x").value),
+            float(self.get_parameter("inside_offset_y").value),
+            float(self.get_parameter("inside_offset_z").value),
+        )
+
+        # Backward compatibility: if the new outside offset is left at zero but
+        # legacy offset_* is configured, use the legacy offset for outside mode.
+        if self.outside_offset == (0.0, 0.0, 0.0) and self.legacy_offset != (0.0, 0.0, 0.0):
+            self.outside_offset = self.legacy_offset
 
         self.button_offset_x = float(self.get_parameter("button_offset_x").value)
         self.button_offset_y = float(self.get_parameter("button_offset_y").value)
         self.button_offset_z = float(self.get_parameter("button_offset_z").value)
+        self.button_offset = (
+            self.button_offset_x,
+            self.button_offset_y,
+            self.button_offset_z,
+        )
         self.prefer_button_offset = bool(
             self.get_parameter("prefer_button_offset").value
         )
@@ -174,6 +218,7 @@ class MarkerButtonPressCommander(Node):
         self._active_goal = False
         self._goal_handle = None
         self._active_cmd = "idle"  # idle | go | press
+        self._active_offset_mode = self.default_offset_mode
         self._state = "IDLE"
 
         # =========================================================
@@ -218,11 +263,19 @@ class MarkerButtonPressCommander(Node):
         self.get_logger().info(f"[button_commander] state_topic={self.state_topic}")
         self.get_logger().info(f"[button_commander] move_action={self.move_action_name}")
         self.get_logger().info(
-            "[button_commander] commands: go|move|exec|execute, press|button|push|click, "
+            "[button_commander] commands: go|move|exec|execute, "
+            "press|press_outside|press_inside|button|push|click, "
             "status, clear, cancel"
         )
         self.get_logger().info(
-            f"[button_commander] offset=({self.offset_x:.4f}, "
+            f"[button_commander] default_offset_mode={self.default_offset_mode}, "
+            f"outside_offset=({self.outside_offset[0]:.4f}, "
+            f"{self.outside_offset[1]:.4f}, {self.outside_offset[2]:.4f}), "
+            f"inside_offset=({self.inside_offset[0]:.4f}, "
+            f"{self.inside_offset[1]:.4f}, {self.inside_offset[2]:.4f})"
+        )
+        self.get_logger().info(
+            f"[button_commander] legacy_offset=({self.offset_x:.4f}, "
             f"{self.offset_y:.4f}, {self.offset_z:.4f}), "
             f"button_offset=({self.button_offset_x:.4f}, "
             f"{self.button_offset_y:.4f}, {self.button_offset_z:.4f}), "
@@ -268,11 +321,25 @@ class MarkerButtonPressCommander(Node):
             return
 
         if cmd in ("go", "move", "exec", "execute"):
-            self._execute_last_marker(active_cmd="go")
+            self._execute_last_marker(
+                active_cmd="go",
+                offset_mode=self.default_offset_mode,
+            )
             return
 
         if cmd in ("press", "button", "push", "click"):
-            self._execute_last_marker(active_cmd="press")
+            self._execute_last_marker(
+                active_cmd="press",
+                offset_mode=self.default_offset_mode,
+            )
+            return
+
+        if cmd in ("press_outside", "outside_press", "button_outside", "push_outside"):
+            self._execute_last_marker(active_cmd="press", offset_mode="outside")
+            return
+
+        if cmd in ("press_inside", "inside_press", "button_inside", "push_inside"):
+            self._execute_last_marker(active_cmd="press", offset_mode="inside")
             return
 
         if cmd == "status":
@@ -295,6 +362,7 @@ class MarkerButtonPressCommander(Node):
     def _print_status(self) -> None:
         self.get_logger().info(
             f"[status] state={self._state}, active_cmd={self._active_cmd}, "
+            f"offset_mode={self._active_offset_mode}, "
             f"active_goal={self._active_goal}"
         )
 
@@ -324,7 +392,11 @@ class MarkerButtonPressCommander(Node):
         self._goal_handle.cancel_goal_async()
         self.get_logger().info("[cancel] cancel requested")
 
-    def _execute_last_marker(self, active_cmd: str) -> None:
+    def _execute_last_marker(
+        self,
+        active_cmd: str,
+        offset_mode: Optional[str] = None,
+    ) -> None:
         if self._active_goal:
             self.get_logger().warn("[button_commander] move is already running")
             if active_cmd == "press":
@@ -368,6 +440,9 @@ class MarkerButtonPressCommander(Node):
             return
 
         self._active_cmd = active_cmd
+        self._active_offset_mode = self._normalize_offset_mode(
+            offset_mode or self.default_offset_mode
+        )
         self._state = "DIRECT_PRESS" if active_cmd == "press" else "SINGLE_MOVE"
         self._publish_state(self._state)
 
@@ -404,11 +479,42 @@ class MarkerButtonPressCommander(Node):
             )
             return None
 
-    def _selected_offset(self):
-        if self.prefer_button_offset:
-            return self.button_offset_x, self.button_offset_y, self.button_offset_z
+    def _normalize_offset_mode(self, mode: str) -> str:
+        normalized = str(mode).strip().lower()
 
-        return self.offset_x, self.offset_y, self.offset_z
+        if normalized in ("inside", "in", "elevator_inside"):
+            return "inside"
+
+        if normalized in ("outside", "out", "elevator_outside"):
+            return "outside"
+
+        self.get_logger().warn(
+            f"[button_commander] unknown offset_mode='{mode}', "
+            f"fallback={self.default_offset_mode}"
+        )
+        return "inside" if self.default_offset_mode == "inside" else "outside"
+
+    def _base_offset_for_mode(self, mode: str):
+        normalized = self._normalize_offset_mode(mode)
+
+        if normalized == "inside":
+            return self.inside_offset
+
+        return self.outside_offset
+
+    def _selected_offset(self):
+        # Legacy compatibility path: if explicitly requested, use button_offset_* only.
+        if self.prefer_button_offset:
+            return self.button_offset
+
+        base_x, base_y, base_z = self._base_offset_for_mode(self._active_offset_mode)
+        fine_x, fine_y, fine_z = self.button_offset
+
+        return (
+            base_x + fine_x,
+            base_y + fine_y,
+            base_z + fine_z,
+        )
 
     def _build_goal(self, target_point: PointStamped) -> MoveGroup.Goal:
         dx, dy, dz = self._selected_offset()
@@ -473,6 +579,7 @@ class MarkerButtonPressCommander(Node):
         self.get_logger().info(
             f"[button_commander] send goal: frame={self.target_frame}, "
             f"xyz=({x:.3f}, {y:.3f}, {z:.3f}), "
+            f"offset_mode={self._active_offset_mode}, "
             f"offset=({dx:.4f}, {dy:.4f}, {dz:.4f}), "
             f"cmd={self._active_cmd}, "
             f"plan_only={self.plan_only}"
@@ -558,6 +665,7 @@ class MarkerButtonPressCommander(Node):
         self._active_goal = False
         self._goal_handle = None
         self._active_cmd = "idle"
+        self._active_offset_mode = self.default_offset_mode
         self._state = "IDLE"
         self._publish_state(self._state)
 
