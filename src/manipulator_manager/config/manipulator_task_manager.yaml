@@ -1,56 +1,41 @@
 manipulator_task_manager:
   ros__parameters:
-    # =========================================================
-    # AMR <-> manipulator interface
-    # =========================================================
     task_cmd_topic: /manipulator_task_cmd
     task_result_topic: /manipulator_task_result
     task_state_topic: /manipulator_task_state
     task_error_topic: /manipulator_task_error
 
-    # =========================================================
-    # Internal arm pose commander interface
-    # =========================================================
     arm_flag_topic: /arm_pose_commander/flag
     arm_done_topic: /arm_pose_commander/done
 
-    # =========================================================
-    # Internal marker button press commander interface
-    # =========================================================
     button_cmd_topic: /marker_button_press_commander/cmd
     button_result_topic: /marker_button_press_commander/result
 
-    # =========================================================
-    # MCU unload interface
-    # =========================================================
+    # object_distance_node runtime target selection
+    perception_target_topic: /manipulator_perception/target_button
+    perception_outside_down: OUTSIDE_DOWN
+    perception_inside_b1: INSIDE_B1
+    perception_inside_3f: INSIDE_3F
+
     mcu_cmd_topic: /mcu/cmd
     mcu_result_topic: /mcu/result
-
     mcu_unload_cmd: UNLOAD
     mcu_unload_done: UNLOAD_DONE
     mcu_unload_failed: UNLOAD_FAILED
     mcu_cancel_cmd: CANCEL
 
-    # true  : wait until /mcu/result publishes UNLOAD_DONE
-    # false : assume unload is done after unload_assume_done_delay_sec
     unload_wait_for_result: true
     unload_assume_done_delay_sec: 5.0
 
-    # =========================================================
-    # Sequence options
-    # =========================================================
     return_home_after_button: true
     return_home_after_unload: true
 
-    # arm_pose_commander reaches scan pose, then wait briefly for marker refresh
+    # 수제 로봇팔 진동 안정화용. scan 자세 도달 후 marker 갱신/진동 안정화 대기.
     marker_settle_sec: 3.0
 
-    # =========================================================
-    # Timeout
-    # =========================================================
     outside_align_timeout_sec: 12.0
     inside_align_timeout_sec: 12.0
-    button_press_timeout_sec: 20.0
+    button_press_timeout_sec: 30.0
     home_timeout_sec: 12.0
     unload_timeout_sec: 25.0
 

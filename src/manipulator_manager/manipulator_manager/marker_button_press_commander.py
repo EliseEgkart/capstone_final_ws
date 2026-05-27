@@ -100,6 +100,10 @@ class MarkerButtonPressCommander(Node):
 
         self.declare_parameter("plan_only", False)
 
+        # 4축 로봇팔에서는 orientation constraint가 planning 실패 원인이 될 수 있음.
+        # 먼저 위치 기반 접근을 성공시키고, 필요할 때만 true로 켜는 것을 권장.
+        self.declare_parameter("use_orientation_constraint", False)
+
         # =========================================================
         # Simple move offset
         # go 명령에서만 사용하는 단순 이동 보정값
@@ -194,6 +198,9 @@ class MarkerButtonPressCommander(Node):
         )
 
         self.plan_only = bool(self.get_parameter("plan_only").value)
+        self.use_orientation_constraint = bool(
+            self.get_parameter("use_orientation_constraint").value
+        )
 
         self.offset_x = float(self.get_parameter("offset_x").value)
         self.offset_y = float(self.get_parameter("offset_y").value)
@@ -341,6 +348,11 @@ class MarkerButtonPressCommander(Node):
             f"press_depth={self.press_depth_m:.3f} m, "
             f"retreat={self.retreat_distance_m:.3f} m"
         )
+        self.get_logger().info(
+            f"[button_commander] use_orientation_constraint="
+            f"{self.use_orientation_constraint}, "
+            f"ori_tol=({self.ori_tol_x:.3f}, {self.ori_tol_y:.3f}, {self.ori_tol_z:.3f})"
+        )
 
         self._publish_state("IDLE")
 
@@ -434,25 +446,35 @@ class MarkerButtonPressCommander(Node):
 
     def _start_button_press_sequence(self) -> None:
         if self._is_busy():
+            reason = f"busy:{self._operation}"
             self.get_logger().warn(
                 f"[press] rejected because operation is running: {self._operation}"
             )
+            self._publish_result(f"button_press_failed:{reason}")
             return
 
         if self.approach_distance_m <= 0.0:
+            reason = "invalid_approach_distance"
             self.get_logger().error("[press] approach_distance_m must be positive")
+            self._publish_result(f"button_press_failed:{reason}")
             return
 
         if self.retreat_distance_m <= 0.0:
+            reason = "invalid_retreat_distance"
             self.get_logger().error("[press] retreat_distance_m must be positive")
+            self._publish_result(f"button_press_failed:{reason}")
             return
 
         if self.press_depth_m < 0.0:
+            reason = "invalid_press_depth"
             self.get_logger().error("[press] press_depth_m must be zero or positive")
+            self._publish_result(f"button_press_failed:{reason}")
             return
 
         button = self._get_smoothed_marker_target()
         if button is None:
+            reason = "no_valid_marker_target"
+            self._publish_result(f"button_press_failed:{reason}")
             return
 
         button = self._add_xyz_offset(
@@ -464,10 +486,12 @@ class MarkerButtonPressCommander(Node):
 
         press_dir = self._axis_to_vector(self.press_axis)
         if press_dir is None:
+            reason = f"invalid_press_axis:{self.press_axis}"
             self.get_logger().error(
                 f"[press] invalid press_axis='{self.press_axis}'. "
                 "Use one of: +x, -x, +y, -y, +z, -z"
             )
+            self._publish_result(f"button_press_failed:{reason}")
             return
 
         approach = self._offset_along_vector(
@@ -1030,7 +1054,9 @@ class MarkerButtonPressCommander(Node):
 
         constraints = Constraints()
         constraints.position_constraints.append(position_constraint)
-        constraints.orientation_constraints.append(orientation_constraint)
+
+        if self.use_orientation_constraint:
+            constraints.orientation_constraints.append(orientation_constraint)
 
         goal = MoveGroup.Goal()
         goal.request.group_name = self.planning_group
@@ -1092,7 +1118,8 @@ def main(args=None) -> None:
         except Exception:
             pass
 
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # object_distance_node.py
-# ros2 topic pub --once /manipulator_perception/target_button std_msgs/msg/String "{data: 'btn_under1_deactive'}"
+# ros2 topic pub --once /manipulator_perception/target_button std_msgs/msg/String "{data: 'OUTSIDE_DOWN'}"
 
 from typing import Optional, Tuple, List
 import numpy as np
@@ -33,6 +33,19 @@ class ObjectDistanceNode(Node):
     (현재 존재하는 토픽 기준으로 동작하도록 구성)
     """
 
+    @staticmethod
+    def _as_string_list(value) -> List[str]:
+        if value is None:
+            return []
+
+        if isinstance(value, str):
+            return [value] if value else []
+
+        try:
+            return [str(v) for v in value if str(v)]
+        except TypeError:
+            return [str(value)] if str(value) else []
+
     def __init__(self):
         super().__init__('object_distance_node')
 
@@ -42,8 +55,17 @@ class ObjectDistanceNode(Node):
         self.declare_parameter('depth_camera_info_topic', '/camera/camera/depth/camera_info')
 
         # 타깃 클래스 필터 (prefix 기반)
-        self.declare_parameter('target_label_prefixes', ['btn_3'])
+        self.declare_parameter('target_label_prefixes', ['btn_down'])
         self.declare_parameter('target_button_topic', '/manipulator_perception/target_button')
+
+        # Runtime target presets.
+        # task_manager sends one of:
+        #   OUTSIDE_DOWN -> external down button
+        #   INSIDE_B1    -> B1 button inside elevator
+        #   INSIDE_3F    -> 3F button inside elevator
+        self.declare_parameter('outside_down_prefixes', ['btn_down'])
+        self.declare_parameter('inside_b1_prefixes', ['elevator_btn_under1'])
+        self.declare_parameter('inside_3f_prefixes', ['elevator_btn_3'])
 
         # TF frame
         self.declare_parameter('base_frame', 'camera_link')   # 로봇 기준 프레임
@@ -76,8 +98,26 @@ class ObjectDistanceNode(Node):
         self.depth_topic = self.get_parameter('depth_image_topic').value
         self.info_topic = self.get_parameter('depth_camera_info_topic').value
 
-        self.target_prefixes = list(self.get_parameter('target_label_prefixes').value)
+        self.target_prefixes = self._as_string_list(
+            self.get_parameter('target_label_prefixes').value
+        )
         self.target_button_topic = self.get_parameter('target_button_topic').value
+
+        self.outside_down_prefixes = self._as_string_list(
+            self.get_parameter('outside_down_prefixes').value
+        )
+        self.inside_b1_prefixes = self._as_string_list(
+            self.get_parameter('inside_b1_prefixes').value
+        )
+        self.inside_3f_prefixes = self._as_string_list(
+            self.get_parameter('inside_3f_prefixes').value
+        )
+
+        self.target_preset_map = {
+            'OUTSIDE_DOWN': self.outside_down_prefixes,
+            'INSIDE_B1': self.inside_b1_prefixes,
+            'INSIDE_3F': self.inside_3f_prefixes,
+        }
 
         self.base_frame = self.get_parameter('base_frame').value
         self.fallback_camera_frame = self.get_parameter('fallback_camera_frame').value
@@ -145,6 +185,9 @@ class ObjectDistanceNode(Node):
         self.get_logger().info(f"[object_distance_node] base_frame={self.base_frame}")
         self.get_logger().info(f"[object_distance_node] initial target_prefixes={self.target_prefixes}")
         self.get_logger().info(f"[object_distance_node] target_button_topic={self.target_button_topic}")
+        self.get_logger().info(f"[object_distance_node] preset OUTSIDE_DOWN={self.outside_down_prefixes}")
+        self.get_logger().info(f"[object_distance_node] preset INSIDE_B1={self.inside_b1_prefixes}")
+        self.get_logger().info(f"[object_distance_node] preset INSIDE_3F={self.inside_3f_prefixes}")
 
     # ---------------- Dynamic target update ----------------
     def _target_button_cb(self, msg: String) -> None:
@@ -154,10 +197,43 @@ class ObjectDistanceNode(Node):
             self.get_logger().warn("[object_distance_node] empty target button ignored")
             return
 
-        self.target_prefixes = [target]
+        target_key = target.upper()
+
+        if target_key in self.target_preset_map:
+            prefixes = self.target_preset_map[target_key]
+            if not prefixes:
+                self.get_logger().warn(
+                    f"[object_distance_node] preset '{target_key}' has no prefixes"
+                )
+                return
+
+            self.target_prefixes = list(prefixes)
+            self.get_logger().info(
+                f"[object_distance_node] target preset updated: "
+                f"{target_key} -> {self.target_prefixes}"
+            )
+            return
+
+        # Direct mode:
+        #   /manipulator_perception/target_button = "btn_down"
+        #   /manipulator_perception/target_button = "elevator_btn_under1,elevator_btn_3"
+        # In direct mode, the received string itself is used as prefix list.
+        direct_prefixes = [
+            item.strip()
+            for item in target.split(',')
+            if item.strip()
+        ]
+
+        if not direct_prefixes:
+            self.get_logger().warn(
+                f"[object_distance_node] invalid direct target ignored: '{target}'"
+            )
+            return
+
+        self.target_prefixes = direct_prefixes
 
         self.get_logger().info(
-            f"[object_distance_node] target button updated: {self.target_prefixes}"
+            f"[object_distance_node] target direct updated: {self.target_prefixes}"
         )
 
     # ---------------- Target selection ----------------
@@ -355,8 +431,9 @@ def main(args=None):
             node.destroy_node()
         except Exception:
             pass
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
-    main()
+    main()  
