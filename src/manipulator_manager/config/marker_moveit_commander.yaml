@@ -1,0 +1,102 @@
+marker_moveit_commander:
+  ros__parameters:
+    # =========================================================
+    # Input / command topics
+    # =========================================================
+    # object_distance_node가 발행하는 버튼 3D marker 토픽
+    # 이 값은 perception YAML의 marker_topic과 반드시 같아야 함
+    marker_topic: /object_3d_marker
+
+    # 로봇팔 이동 명령을 받을 토픽
+    # go, move, exec, execute, status, clear, cancel 명령을 받음
+    cmd_topic: /manipulator_manager/cmd
+
+    # MoveIt MoveGroup action server 이름
+    # moveit_core.launch.py에서 올라오는 action 이름과 일치해야 함
+    move_action_name: /move_action
+
+    # =========================================================
+    # MoveIt planning target
+    # =========================================================
+    # MoveIt SRDF에 정의된 planning group 이름
+    planning_group: arm
+
+    # 목표 위치로 보낼 end-effector link
+    # URDF/SRDF의 ee_link와 일치해야 함
+    ee_link: ee_link
+
+    # marker point를 변환할 최종 기준 프레임
+    # object_distance_node가 marker를 camera_link로 내더라도,
+    # 여기서 link1 기준으로 TF 변환 후 MoveIt goal을 생성함
+    target_frame: link1
+
+    # =========================================================
+    # Marker validity / position tolerance
+    # =========================================================
+    # marker가 들어온 뒤 이 시간보다 오래되면 이동하지 않음
+    marker_timeout_sec: 30.0
+
+    # ee_link가 목표점 주변 어느 반경 안에 들어오면 성공으로 볼지 결정
+    # 단위: meter
+    position_tolerance_m: 0.01
+
+    # =========================================================
+    # Motion speed tuning
+    # =========================================================
+    # MoveIt 최대 속도의 비율
+    # 0.1~0.3부터 실험 권장
+    max_velocity_scaling: 0.2
+
+    # MoveIt 최대 가속도의 비율
+    # 너무 크면 움직임이 급격해질 수 있음
+    max_acceleration_scaling: 0.2
+
+    # planning 허용 시간
+    allowed_planning_time_sec: 3.0
+
+    # planning 재시도 횟수
+    num_planning_attempts: 5
+
+    # =========================================================
+    # Target offset
+    # =========================================================
+    # marker 위치에서 실제 ee_link 목표점을 얼마나 보정할지 결정
+    # 버튼 중심보다 조금 앞/뒤/위/아래를 누르고 싶을 때 사용
+    #
+    # 예:
+    # 버튼 표면보다 살짝 앞으로 누르려면 축 방향에 맞게 offset 적용
+    offset_x: 0.003
+    offset_y: -0.03
+    offset_z: 0.007
+
+    # =========================================================
+    # End-effector orientation
+    # =========================================================
+    # ee_link 목표 자세 quaternion
+    # 현재 기본값은 단위 quaternion
+    goal_qx: 0.0
+    goal_qy: 0.0
+    goal_qz: 0.0
+    goal_qw: 1.0
+
+    # orientation 허용 오차
+    # 3.14는 사실상 자세를 거의 자유롭게 허용하는 수준
+    # 버튼을 정면으로 정확히 누르려면 이 값을 줄여야 함
+    ori_tol_x: 3.14
+    ori_tol_y: 3.14
+    ori_tol_z: 3.14
+
+    # =========================================================
+    # Replanning
+    # =========================================================
+    # 계획 실패 시 재계획 허용 여부
+    replan: true
+
+    # 재계획 시도 횟수
+    replan_attempts: 1
+
+    # 재계획 사이 대기 시간
+    replan_delay_sec: 1.0
+
+    # MoveIt action server 대기 시간
+    wait_for_server_sec: 2.0

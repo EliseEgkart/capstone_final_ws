@@ -1,0 +1,26 @@
+# SL LIDAR udev rules (front/rear)
+#
+# Creates stable symlinks:
+#   /dev/ttyUSB_LIDAR1_FRONT
+#   /dev/ttyUSB_LIDAR2_REAR
+#
+# IMPORTANT:
+# - You must match each lidar using a UNIQUE attribute (serial number or physical USB port).
+# - Using only idVendor/idProduct will match both lidars and make symlinks unreliable.
+#
+# Recommended (match by serial):
+# 1) Plug lidars in and find their serials:
+#    udevadm info -a -n /dev/ttyUSB0 | grep -E 'ATTRS\\{serial\\}|idVendor|idProduct' -n
+#    udevadm info -a -n /dev/ttyUSB1 | grep -E 'ATTRS\\{serial\\}|idVendor|idProduct' -n
+# 2) Replace FRONT_SERIAL / REAR_SERIAL below.
+#
+# Alternative (match by USB port path):
+# - Use: udevadm info -q property -n /dev/ttyUSB0 | grep ID_PATH=
+# - Then match with: ENV{ID_PATH}=="..."
+
+SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="FRONT_SERIAL", MODE:="0666", SYMLINK+="ttyUSB_LIDAR1_FRONT"
+SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="REAR_SERIAL",  MODE:="0666", SYMLINK+="ttyUSB_LIDAR2_REAR"
+
+# Example (ID_PATH matching):
+# SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ENV{ID_PATH}=="<front_id_path>", MODE:="0666", SYMLINK+="ttyUSB_LIDAR1_FRONT"
+# SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ENV{ID_PATH}=="<rear_id_path>",  MODE:="0666", SYMLINK+="ttyUSB_LIDAR2_REAR"

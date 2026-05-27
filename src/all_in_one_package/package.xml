@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>all_in_one_package</name>
+  <version>0.0.0</version>
+  <description>The all_in_one_package package</description>
+
+  <maintainer email="you@example.com">your_name</maintainer>
+
+  <license>Apache License 2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>launch</depend>
+  <depend>launch_ros</depend>
+  <depend>ament_index_python</depend>
+
+  <!-- 추가된 의존성 -->
+  <exec_depend>nav2</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,81 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="manipulator">
+
+  <!-- ========================================================= -->
+  <!-- Initial joint positions                                  -->
+  <!-- ========================================================= -->
+  <!-- open-loop PWM 서보에서는 실제 피드백이 없으므로 초기 상태 추정값으로 사용 -->
+  <xacro:arg
+    name="initial_positions_file"
+    default="$(find manipulator_moveit)/config/initial_positions.yaml" />
+
+  <!-- ========================================================= -->
+  <!-- Hardware interface arguments                             -->
+  <!-- ========================================================= -->
+  <!-- mock에서 실제 ESP32 serial hardware interface로 전환하기 위한 설정 -->
+  <xacro:arg
+    name="hardware_plugin"
+    default="manipulator_hardware/ManipulatorHardwareInterface" />
+
+  <xacro:arg
+    name="serial_port"
+    default="/dev/ttyUSB_ESP32" />
+
+  <xacro:arg
+    name="baud_rate"
+    default="115200" />
+
+  <xacro:arg
+    name="timeout_ms"
+    default="50" />
+
+  <xacro:arg
+    name="control_mode"
+    default="open_loop" />
+
+  <!-- ========================================================= -->
+  <!-- Main robot model                                         -->
+  <!-- ========================================================= -->
+  <xacro:include
+    filename="$(find manipulator)/description/capstone_manipulator.urdf.xacro" />
+
+  <!-- ========================================================= -->
+  <!-- ros2_control configuration                               -->
+  <!-- ========================================================= -->
+  <xacro:include
+    filename="$(find manipulator_moveit)/config/manipulator.ros2_control.xacro" />
+
+  <!-- ========================================================= -->
+  <!-- ros2_control hardware instance                           -->
+  <!-- ========================================================= -->
+  <xacro:manipulator_ros2_control
+    name="manipulator_system"
+    initial_positions_file="$(arg initial_positions_file)"
+    hardware_plugin="$(arg hardware_plugin)"
+    serial_port="$(arg serial_port)"
+    baud_rate="$(arg baud_rate)"
+    timeout_ms="$(arg timeout_ms)"
+    control_mode="$(arg control_mode)" />
+
+</robot>
+<!--
+OLD manipulator.urdf.xacro backup
+
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="manipulator">
+
+  <xacro:arg
+    name="initial_positions_file"
+    default="$(find manipulator_moveit)/config/initial_positions.yaml" />
+
+  <xacro:include
+    filename="$(find manipulator)/description/capstone_manipulator.urdf.xacro" />
+
+  <xacro:include
+    filename="$(find manipulator_moveit)/config/manipulator.ros2_control.xacro" />
+
+  <xacro:manipulator_ros2_control
+    name="manipulator_system"
+    initial_positions_file="$(arg initial_positions_file)" />
+
+</robot>
+-->

@@ -1,0 +1,44 @@
+ekf_filter_node:
+  ros__parameters:
+    frequency: 50.0
+    sensor_timeout: 0.1
+    two_d_mode: true
+    publish_tf: true
+    publish_acceleration: false
+    print_diagnostics: true
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+
+    # raw wheel odom
+    odom0: /wheel/odometry
+    odom0_queue_size: 20
+    odom0_differential: false
+    odom0_relative: false
+    #Nav용 odom0_config
+    # odom0_config: [false, false, false,
+    #                false, false, false,
+    #                true,  true,  false,
+    #                false, false, true,
+    #                false, false, false]
+    #Map 생성용 odom0_config
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  true,  false,
+                   false, false, false,
+                   false, false, false]
+
+    # EBIMU
+    # 1차 권장안: yaw + yaw_rate만 사용
+    # linear acceleration은 일단 퍼블리시만 하고 EKF에는 넣지 않음
+    imu0: /imu/data
+    imu0_queue_size: 50
+    imu0_differential: false
+    imu0_relative: true
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]

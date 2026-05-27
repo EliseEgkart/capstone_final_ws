@@ -1,0 +1,7 @@
+image: non_merger_2f.pgm
+mode: trinary
+resolution: 0.03
+origin: [-4.89, -7.71, 0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.25

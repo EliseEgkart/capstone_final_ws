@@ -1,0 +1,408 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="manipulator">
+
+  <!-- ========================================================= -->
+  <!-- 외부 Xacro include                                       -->
+  <!-- ========================================================= -->
+  <!-- RealSense D435 모델을 사용하기 위한 xacro include -->
+<xacro:include filename="$(find realsense2_description)/urdf/_d435.urdf.xacro"/>  <!-- ========================================================= -->
+  <!-- 운동학 모델 정의                                         -->
+  <!-- ========================================================= -->
+  <!--
+    본 파일은 4축 직렬 다관절 로봇팔의 URDF Xacro 모델이다.
+
+    좌표계 및 단위:
+      - 길이 단위: meter [m]
+      - 회전 단위: radian [rad]
+      - +Z: 수직 상방
+      - +X: 로봇팔 전개 방향
+      - +Y: 오른손 좌표계 기준
+
+    운동학 체인:
+      link1 -> joint1 -> link2 -> joint2 -> link3
+            -> joint3 -> link4 -> joint4 -> link5
+            -> ee_fixed_joint -> ee_link
+            -> camera_joint -> camera_link
+
+    중요:
+      - mesh_xyz는 STL 형상의 표시 위치를 보정한다.
+      - joint*_origin_*는 실제 회전축 중심을 보정한다.
+      - 정지 상태 형상만 어긋나면 mesh_xyz를 수정한다.
+      - 회전할 때 축이 안 맞으면 joint origin을 수정한다.
+      - camera_link는 직접 box로 만들지 않고 realsense2_description의 D435 xacro를 사용한다.
+  -->
+
+  <!-- ========================================================= -->
+  <!-- 치수 변수 선언                                            -->
+  <!-- ========================================================= -->
+
+  <xacro:property name="link_w" value="0.050"/>
+  <xacro:property name="link_d" value="0.050"/>
+
+  <xacro:property name="base_h" value="0.088576"/>
+  <xacro:property name="joint1_to_joint2" value="0.058118"/>
+  <xacro:property name="joint2_to_joint3_z" value="0.263683"/>
+  <xacro:property name="joint2_to_joint3_x" value="0.031016"/>
+  <xacro:property name="joint3_to_joint4" value="0.346599"/>
+  <xacro:property name="wrist_link_len" value="0.090002"/>
+
+  <!-- 엔드이펙터 TCP 위치 -->
+  <xacro:property name="ee_offset_x" value="0.090002"/>
+  <xacro:property name="ee_offset_y" value="-0.034040"/>
+  <xacro:property name="ee_offset_z" value="0.019938"/>
+  <xacro:property name="ee_size" value="0.010"/>
+
+  <!-- D435 카메라 장착 위치 -->
+  <!-- 기존 camera_joint origin 값인 ${wrist_link_len / 2.0} 0 0.030을 변수화 -->
+  <xacro:property name="camera_origin_x" value="0.0"/>
+  <xacro:property name="camera_origin_y" value="0.000000"/>
+  <xacro:property name="camera_origin_z" value="0.035000"/>
+
+  <xacro:property name="camera_origin_roll" value="0.000000"/>
+  <xacro:property name="camera_origin_pitch" value="0.000000"/>
+  <xacro:property name="camera_origin_yaw" value="0.000000"/>
+
+  <!-- ========================================================= -->
+  <!-- 관절 회전축 중심 보정값                                   -->
+  <!-- ========================================================= -->
+  <!--
+    회전했을 때 STL의 구멍 중심과 실제 회전축이 어긋나면
+    아래 joint*_origin_* 값을 수정한다.
+
+    기준:
+      joint1 origin: link1 기준
+      joint2 origin: link2 기준
+      joint3 origin: link3 기준
+      joint4 origin: link4 기준
+  -->
+
+  <xacro:property name="joint1_origin_x" value="0.000000"/>
+  <xacro:property name="joint1_origin_y" value="0.000000"/>
+  <xacro:property name="joint1_origin_z" value="${base_h}"/>
+
+  <xacro:property name="joint2_origin_x" value="0.000000"/>
+  <xacro:property name="joint2_origin_y" value="0.000000"/>
+  <xacro:property name="joint2_origin_z" value="${joint1_to_joint2}"/>
+
+  <xacro:property name="joint3_origin_x" value="${joint2_to_joint3_x}"/>
+  <xacro:property name="joint3_origin_y" value="0.000000"/>
+  <xacro:property name="joint3_origin_z" value="${joint2_to_joint3_z}"/>
+
+  <xacro:property name="joint4_origin_x" value="${joint3_to_joint4}"/>
+  <xacro:property name="joint4_origin_y" value="0.000000"/>
+  <xacro:property name="joint4_origin_z" value="0.000000"/>
+
+  <!-- ========================================================= -->
+  <!-- 관절 회전축 방향                                          -->
+  <!-- ========================================================= -->
+  <!--
+    회전 중심은 맞는데 회전 방향이 반대이면 axis 부호를 바꾼다.
+    예: 0 1 0 -> 0 -1 0
+  -->
+
+  <xacro:property name="joint1_axis" value="0 0 1"/>
+  <xacro:property name="joint2_axis" value="0 1 0"/>
+  <xacro:property name="joint3_axis" value="0 1 0"/>
+  <xacro:property name="joint4_axis" value="0 1 0"/>
+
+  <!-- ========================================================= -->
+  <!-- STL mesh 설정                                             -->
+  <!-- ========================================================= -->
+
+  <xacro:property name="mesh_scale" value="0.001 0.001 0.001"/>
+
+  <!-- STL 위치 보정값 -->
+  <xacro:property name="base_mesh_xyz" value="-0.02 -0.1815 0.077"/>
+  <xacro:property name="base_mesh_rpy" value="0 0 0"/>
+
+  <xacro:property name="link1_mesh_xyz" value="-0.022 0.0385 -0.012"/>
+  <xacro:property name="link1_mesh_rpy" value="0 0 0"/>
+
+  <xacro:property name="link2_mesh_xyz" value="-0.022 0.0385 -0.0701"/>
+  <xacro:property name="link2_mesh_rpy" value="0 0 0"/>
+
+  <xacro:property name="link3_mesh_xyz" value="-0.053 0.0385 -0.3339"/>
+  <xacro:property name="link3_mesh_rpy" value="0 0 0"/>
+
+  <xacro:property name="link4_mesh_xyz" value="-0.43 0.0385 -0.334"/>
+  <xacro:property name="link4_mesh_rpy" value="0 0 0"/>
+
+  <!-- ========================================================= -->
+  <!-- 관절 제한값                                               -->
+  <!-- ========================================================= -->
+
+  <xacro:property name="joint1_lower" value="-3.14159"/>  <!-- theta1_min = -180 deg -->
+  <xacro:property name="joint1_upper" value="0.0"/>       <!-- theta1_max =    0 deg -->
+
+  <xacro:property name="joint2_lower" value="-1.57080"/>  <!-- theta2_min =  -90 deg -->
+  <xacro:property name="joint2_upper" value="2.00713"/>   <!-- theta2_max =  115 deg -->
+
+  <xacro:property name="joint3_lower" value="-1.57080"/>  <!-- theta3_min =  -90 deg -->
+  <xacro:property name="joint3_upper" value="1.30900"/>   <!-- theta3_max =   60 deg -->
+
+  <xacro:property name="joint4_lower" value="-0.41888"/>  <!-- theta4_min =  -24 deg -->
+  <xacro:property name="joint4_upper" value="1.22173"/>   <!-- theta4_max =   70 deg -->
+
+  <xacro:property name="joint_effort" value="0.1"/>
+  <xacro:property name="joint_velocity" value="4.8"/>
+
+  <!-- ========================================================= -->
+  <!-- 재사용 매크로                                             -->
+  <!-- ========================================================= -->
+
+  <xacro:macro name="mesh_visual" params="mesh_file xyz rpy material_name">
+    <visual>
+      <origin xyz="${xyz}" rpy="${rpy}"/>
+      <geometry>
+        <mesh filename="package://manipulator/model/${mesh_file}" scale="${mesh_scale}"/>
+      </geometry>
+      <material name="${material_name}"/>
+    </visual>
+  </xacro:macro>
+
+  <xacro:macro name="simple_inertial" params="xyz mass ixx iyy izz">
+    <inertial>
+      <origin xyz="${xyz}" rpy="0 0 0"/>
+      <mass value="${mass}"/>
+      <inertia ixx="${ixx}" ixy="0" ixz="0" iyy="${iyy}" iyz="0" izz="${izz}"/>
+    </inertial>
+  </xacro:macro>
+
+  <!-- ========================================================= -->
+  <!-- Materials                                                 -->
+  <!-- ========================================================= -->
+
+  <material name="grey">
+    <color rgba="0.2 0.2 0.2 1.0"/>
+  </material>
+
+  <material name="dark_grey">
+    <color rgba="0.05 0.05 0.05 1.0"/>
+  </material>
+
+  <material name="red">
+    <color rgba="0.6 0.1 0.1 1.0"/>
+  </material>
+
+  <!-- ========================================================= -->
+  <!-- link1: base block                                         -->
+  <!-- STL: base_link.stl                                        -->
+  <!-- ========================================================= -->
+
+  <link name="link1">
+    <xacro:mesh_visual
+      mesh_file="base_link.stl"
+      xyz="${base_mesh_xyz}"
+      rpy="${base_mesh_rpy}"
+      material_name="dark_grey"/>
+
+    <collision>
+      <origin xyz="0 0 ${base_h / 2.0}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${link_w} ${link_d} ${base_h}"/>
+      </geometry>
+    </collision>
+
+    <xacro:simple_inertial
+      xyz="0 0 ${base_h / 2.0}"
+      mass="1.0"
+      ixx="0.0004166667"
+      iyy="0.0004166667"
+      izz="0.0004166667"/>
+  </link>
+
+  <!-- ========================================================= -->
+  <!-- joint1: base yaw                                          -->
+  <!-- ========================================================= -->
+
+  <joint name="joint1" type="revolute">
+    <parent link="link1"/>
+    <child link="link2"/>
+    <origin xyz="${joint1_origin_x} ${joint1_origin_y} ${joint1_origin_z}" rpy="0 0 0"/>
+    <axis xyz="${joint1_axis}"/>
+    <limit effort="${joint_effort}" lower="${joint1_lower}" upper="${joint1_upper}" velocity="${joint_velocity}"/>
+  </joint>
+
+  <!-- ========================================================= -->
+  <!-- link2: joint1-to-joint2 vertical link                     -->
+  <!-- STL: link_1.stl                                           -->
+  <!-- ========================================================= -->
+
+  <link name="link2">
+    <xacro:mesh_visual
+      mesh_file="link_1.stl"
+      xyz="${link1_mesh_xyz}"
+      rpy="${link1_mesh_rpy}"
+      material_name="grey"/>
+
+    <collision>
+      <origin xyz="0 0 ${joint1_to_joint2 / 2.0}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${link_w} ${link_d} ${joint1_to_joint2}"/>
+      </geometry>
+    </collision>
+
+    <xacro:simple_inertial
+      xyz="0 0 ${joint1_to_joint2 / 2.0}"
+      mass="0.8"
+      ixx="0.00035"
+      iyy="0.00035"
+      izz="0.0003333333"/>
+  </link>
+
+  <!-- ========================================================= -->
+  <!-- joint2: shoulder pitch                                    -->
+  <!-- ========================================================= -->
+
+  <joint name="joint2" type="revolute">
+    <parent link="link2"/>
+    <child link="link3"/>
+    <origin xyz="${joint2_origin_x} ${joint2_origin_y} ${joint2_origin_z}" rpy="0 0 0"/>
+    <axis xyz="${joint2_axis}"/>
+    <limit effort="${joint_effort}" lower="${joint2_lower}" upper="${joint2_upper}" velocity="${joint_velocity}"/>
+  </joint>
+
+  <!-- ========================================================= -->
+  <!-- link3: joint2-to-joint3 bent/protruded link               -->
+  <!-- STL: link_2.stl                                           -->
+  <!-- ========================================================= -->
+
+  <link name="link3">
+    <xacro:mesh_visual
+      mesh_file="link_2.stl"
+      xyz="${link2_mesh_xyz}"
+      rpy="${link2_mesh_rpy}"
+      material_name="grey"/>
+
+    <collision>
+      <origin xyz="0 0 ${joint2_to_joint3_z / 2.0}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${link_w} ${link_d} ${joint2_to_joint3_z}"/>
+      </geometry>
+    </collision>
+
+    <collision>
+      <origin xyz="${joint2_to_joint3_x / 2.0} 0 ${joint2_to_joint3_z}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${joint2_to_joint3_x} ${link_d} ${link_w}"/>
+      </geometry>
+    </collision>
+
+    <xacro:simple_inertial
+      xyz="0 0 ${joint2_to_joint3_z / 2.0}"
+      mass="0.6"
+      ixx="0.0044"
+      iyy="0.0044"
+      izz="0.00025"/>
+  </link>
+
+  <!-- ========================================================= -->
+  <!-- joint3: elbow pitch                                       -->
+  <!-- ========================================================= -->
+
+  <joint name="joint3" type="revolute">
+    <parent link="link3"/>
+    <child link="link4"/>
+    <origin xyz="${joint3_origin_x} ${joint3_origin_y} ${joint3_origin_z}" rpy="0 0 0"/>
+    <axis xyz="${joint3_axis}"/>
+    <limit effort="${joint_effort}" lower="${joint3_lower}" upper="${joint3_upper}" velocity="${joint_velocity}"/>
+  </joint>
+
+  <!-- ========================================================= -->
+  <!-- link4: main horizontal arm                                -->
+  <!-- STL: link_3.stl                                           -->
+  <!-- ========================================================= -->
+
+  <link name="link4">
+    <xacro:mesh_visual
+      mesh_file="link_3.stl"
+      xyz="${link3_mesh_xyz}"
+      rpy="${link3_mesh_rpy}"
+      material_name="grey"/>
+
+    <collision>
+      <origin xyz="${joint3_to_joint4 / 2.0} 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${joint3_to_joint4} ${link_d} ${link_w}"/>
+      </geometry>
+    </collision>
+
+    <xacro:simple_inertial
+      xyz="${joint3_to_joint4 / 2.0} 0 0"
+      mass="0.5"
+      ixx="0.0002083333"
+      iyy="0.0062"
+      izz="0.0062"/>
+  </link>
+
+  <!-- ========================================================= -->
+  <!-- joint4: wrist pitch                                       -->
+  <!-- ========================================================= -->
+
+  <joint name="joint4" type="revolute">
+    <parent link="link4"/>
+    <child link="link5"/>
+    <origin xyz="${joint4_origin_x} ${joint4_origin_y} ${joint4_origin_z}" rpy="0 0 0"/>
+    <axis xyz="${joint4_axis}"/>
+    <limit effort="${joint_effort}" lower="${joint4_lower}" upper="${joint4_upper}" velocity="${joint_velocity}"/>
+  </joint>
+
+  <!-- ========================================================= -->
+  <!-- link5: wrist / end-effector body                          -->
+  <!-- STL: link_4.stl                                           -->
+  <!-- ========================================================= -->
+
+  <link name="link5">
+    <xacro:mesh_visual
+      mesh_file="link_4.stl"
+      xyz="${link4_mesh_xyz}"
+      rpy="${link4_mesh_rpy}"
+      material_name="red"/>
+
+    <collision>
+      <origin xyz="${wrist_link_len / 2.0} 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${wrist_link_len} ${link_w} ${link_d}"/>
+      </geometry>
+    </collision>
+
+    <xacro:simple_inertial
+      xyz="${wrist_link_len / 2.0} 0 0"
+      mass="0.2"
+      ixx="0.00003"
+      iyy="0.0001766667"
+      izz="0.0001766667"/>
+  </link>
+
+  <!-- ========================================================= -->
+  <!-- ee_link: end-effector TCP reference frame                 -->
+  <!-- TCP 위치 확인용 작은 visual marker                         -->
+  <!-- ========================================================= -->
+
+  <link name="ee_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${ee_size} ${ee_size} ${ee_size}"/>
+      </geometry>
+      <material name="dark_grey"/>
+    </visual>
+  </link>
+
+  <joint name="ee_fixed_joint" type="fixed">
+    <parent link="link5"/>
+    <child link="ee_link"/>
+    <origin xyz="${ee_offset_x} ${ee_offset_y} ${ee_offset_z}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ========================================================= -->
+  <!-- D435 camera                                               -->
+  <!-- 기존 box camera_link/camera_joint 대신 D435 xacro 사용     -->
+  <!-- ========================================================= -->
+
+  <xacro:sensor_d435 parent="link5" name="camera">
+    <origin xyz="${camera_origin_x} ${camera_origin_y} ${camera_origin_z}"
+            rpy="${camera_origin_roll} ${camera_origin_pitch} ${camera_origin_yaw}"/>
+  </xacro:sensor_d435>
+
+</robot>

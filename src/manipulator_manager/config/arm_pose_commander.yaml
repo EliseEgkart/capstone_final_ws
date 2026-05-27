@@ -1,0 +1,67 @@
+arm_pose_commander:
+  ros__parameters:
+    # =========================================================
+    # Topics
+    # =========================================================
+    flag_topic: /arm_pose_commander/flag
+    done_topic: /arm_pose_commander/done
+
+    # MoveIt MoveGroup action server
+    move_action_name: /move_action
+
+    # =========================================================
+    # MoveIt group / joints
+    # =========================================================
+    planning_group: arm
+
+    joint_names:
+      - joint1
+      - joint2
+      - joint3
+      - joint4
+
+    # =========================================================
+    # Pose modes
+    # =========================================================
+    # 엘리베이터 외부 호출/승차 버튼을 인식하기 위한 자세
+    # flag: outside_scan
+    outside_scan_positions:
+      - -0.5744775939086038
+      - -0.8917605067945057
+      - 0.6494703239994609
+      - 0.1376985579567038
+
+    # 엘리베이터 내부 층수 버튼을 인식하기 위한 자세
+    # flag: inside_scan
+    inside_scan_positions:
+      - -1.4902385994651557
+      - -0.4311009578952752
+      - 0.5612286785710505
+      - -0.18957269675268792
+
+    # 기본 자세
+    # flag: home
+    home_positions:
+      - 0.0
+      - -0.74718
+      - 0.84648
+      - -0.02443
+
+    # =========================================================
+    # Tolerance / speed
+    # =========================================================
+    joint_tolerance: 0.02
+
+    max_velocity_scaling: 0.2
+    max_acceleration_scaling: 0.2
+
+    allowed_planning_time_sec: 3.0
+    num_planning_attempts: 5
+
+    # =========================================================
+    # Replanning
+    # =========================================================
+    replan: true
+    replan_attempts: 1
+    replan_delay_sec: 1.0
+    wait_for_server_sec: 2.0

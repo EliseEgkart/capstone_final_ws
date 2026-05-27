@@ -1,0 +1,50 @@
+maps:
+  B1:
+    map_yaml: "ff_ekf_B1.yaml"
+
+    elevator_exit:
+      x: -4.0446
+      y: 2.9403
+      yaw: -1.5552
+
+    destination:
+      x: -7.1016
+      y: 2.1829
+      yaw: -3.1021
+
+  3:
+    map_yaml: "ff_ekf_3f.yaml"
+
+    room_front:
+      x: 28.6775
+      y: -0.9694
+      yaw: 1.4309
+
+    elevator_btn_front:
+      x: 43.1755
+      y: -3.4449
+      yaw: 0.0530
+      # x: 43.3255
+      # y: -3.7549
+      # yaw: 0.3480
+
+    elevator_front:
+      x: 43.3255
+      y: -2.9770
+      yaw: -0.0056
+
+    elevator_inside:
+      x: 45.1970
+      y: -3.0044
+      yaw: 0.1049
+
+    elevator_btn_inside:
+      x: 45.5
+      y: -3.48
+      yaw: -0.0290
+
+    elevator_inside_for_exit:
+      x: 45.2
+      y: -2.88
+      yaw: 3.0908
+

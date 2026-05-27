@@ -1,0 +1,87 @@
+maps:
+  B1:
+    map_yaml: "ff_ekf_B1.yaml"
+
+    # elevator_inside_for_btn_clk:
+    #   x: -3.4667
+    #   y: 5.6867
+    #   yaw: 1.3901
+
+    # elevator_align_for_exit:
+    #   x: -4.0855
+    #   y: 5.5501
+    #   yaw: -1.6867
+
+    # elevator_exit:
+    #   x: -4.0446
+    #   y: 2.9403
+    #   yaw: -1.5552
+
+    # destination:
+    #   x: -7.1016
+    #   y: 2.1829
+    #   yaw: -3.1021
+
+  1:
+    map_yaml: "ff_ekf_1f.yaml"
+
+    start:
+      x: 2.9549
+      y: -0.7783
+      yaw: 1.8491
+
+    elevator_front:
+      x: 40.3408
+      y: -2.6975
+      yaw: -0.0682
+
+    elevator_inside:
+      x: 42.5574
+      y: -2.7083
+      yaw: 0.1130
+
+    elevator_exit:
+      x: 38.9625
+      y: -2.6244
+      yaw: 3.0870
+
+  2:
+    map_yaml: "ff_ekf_2f_map.yaml"
+
+    elevator_inside:
+      x: 38.8940
+      y: 4.4140
+      yaw: -3.0607
+
+    elevator_exit:
+      x: 37.7870
+      y: 4.3194
+      yaw: -2.9924
+
+  3:
+    map_yaml: "ff_ekf_3f.yaml"
+
+    elevator_inside:
+      x: 45.3815
+      y: -2.9157
+      yaw: 2.9476
+
+    elevator_exit:
+      x: 42.4188
+      y: -2.8761
+      yaw: -3.1294
+
+rooms:
+  "302":
+    floor: 3
+    pose:
+      x: 11.1582
+      y: -0.6116
+      yaw: -1.5667
+
+  "204":
+    floor: 2
+    pose:
+      x: 2.8776
+      y: 0.1729
+      yaw: -1.2582

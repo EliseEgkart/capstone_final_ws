@@ -1,0 +1,12 @@
+serial_flag_bridge:
+  ros__parameters:
+    port: /dev/ttyUSB0
+    baudrate: 115200
+    timeout: 0.1
+    line_ending: "\n"
+    tx_topic: serial_tx
+    rx_topic: serial_rx
+    auto_reconnect: true
+    reconnect_sec: 1.0
+    log_rx: true
+    log_tx: true

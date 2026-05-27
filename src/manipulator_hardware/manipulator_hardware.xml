@@ -1,0 +1,10 @@
+<library path="manipulator_hardware">
+  <class
+    name="manipulator_hardware/ManipulatorHardwareInterface"
+    type="manipulator_hardware::ManipulatorHardwareInterface"
+    base_class_type="hardware_interface::SystemInterface">
+    <description>
+      ESP32 serial hardware interface for the manipulator.
+    </description>
+  </class>
+</library>

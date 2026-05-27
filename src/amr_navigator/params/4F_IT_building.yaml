@@ -1,0 +1,15 @@
+frame_id: map
+waypoints:
+  work_station1:
+    position: {x: 2.4484949111938477, y: -0.3362729549407959, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.0689064951300567, w: 0.997623122691576}
+
+  work_station2:
+    position: {x: -0.2876734733581543, y: 1.9826674461364746, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.693953007566359, w: 0.7200202936651194}
+
+  work_station3:
+    position: {x: -0.8063347935676575, y: -0.7460460066795349, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.9976666263428681, w: 0.06827373346785819}
+
+sequence: [work_station1, work_station2, work_station3]

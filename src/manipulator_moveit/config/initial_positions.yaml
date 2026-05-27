@@ -1,0 +1,5 @@
+initial_positions:
+  joint1: 0.00000    # 0.00 deg
+  joint2: -0.74718   # -42.81 deg
+  joint3: 0.84648    # 48.50 deg
+  joint4: -0.02443   # -1.40 deg
