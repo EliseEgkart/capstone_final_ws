@@ -1,28 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-elevator_delivery_final_with_manipulator.py
+elevator_manager_final_with_manipulator.py
 
 3F room_front -> elevator_btn_front -> elevator_front -> elevator_inside
 -> elevator_btn_inside -> elevator_inside_for_exit -> B1 elevator_exit -> destination
 
-메니퓰레이터 연동 반영 사항
-1) elevator_btn_front 도착 시 /outside_btn_front_goal Bool 플래그를 발행한다.
-2) 로봇팔이 /manipulator_btn1_done Bool(True)를 보내면
-   elevator_btn_front -> elevator_front로 다음 이동을 진행한다.
-   - 기존 btn_down_active YOLO 인식 대기 로직을 이 플래그 수신 대기로 대체한다.
-3) elevator_btn_inside 도착 시 /inside_btn_front_goal Bool 플래그를 발행한다.
-4) 로봇팔이 /manipulator_btn2_done Bool(True)를 보내면
-   elevator_btn_inside -> elevator_inside_for_exit로 다음 이동을 진행한다.
-   - 기존 elevator_btn_under1_active YOLO 인식 대기 로직을 이 플래그 수신 대기로 대체한다.
-5) B1 destination 도착 시 /destination_goal Bool 플래그를 발행한다.
-6) goal 플래그는 기본적으로 transient_local QoS + 반복 발행을 사용한다.
-   단, 로봇팔 쪽 subscriber도 transient_local QoS를 사용하면 늦게 켜져도 마지막 goal 값을 받을 수 있다.
+메니퓰레이터 task manager 연동 반영 사항
+AMR -> Manipulator:
+  /manipulator_task_cmd      std_msgs/msg/String
+
+Manipulator -> AMR:
+  /manipulator_task_result   std_msgs/msg/String
+  /manipulator_task_state    std_msgs/msg/String
+
+작업 명령 문자열 기본값
+1) elevator_btn_front 도착 시 /manipulator_task_cmd 로
+   data: "OUTSIDE_BTN_FRONT" 발행
+2) /manipulator_task_result 에서
+   data: "OUTSIDE_BTN_DONE" 를 받으면 elevator_front로 다음 이동
+3) elevator_btn_inside 도착 시 /manipulator_task_cmd 로
+   data: "INSIDE_BTN_FRONT" 발행
+4) /manipulator_task_result 에서
+   data: "INSIDE_BTN_DONE" 를 받으면 elevator_inside_for_exit로 다음 이동
+5) B1 destination 도착 시 /manipulator_task_cmd 로
+   data: "DESTINATION_UNLOAD" 발행
+   - 현재 요구사항에서는 destination_goal에 대한 완료 응답은 기다리지 않는다.
 
 기존 유지 사항
 - RealSense 카메라 노드(realsense2_camera)는 이 파일에서 실행하지 않는다.
 - YOLO 관련 함수/파라미터는 호환성을 위해 남겨두었지만,
-  메인 미션 흐름에서는 버튼 active 인식 대기 대신 메니퓰레이터 done 플래그를 사용한다.
+  메인 미션 흐름에서는 버튼 active 인식 대기 대신 메니퓰레이터 task result를 사용한다.
 - 주요 이동 구간마다 robot_for_move.mp3 1회 재생
 - room_front 출발 시 starting_bgm.mp3 1회 재생
 - destination 도착 시 destination.mp3 1회, 5초 뒤 give_snack.mp3 1회 재생
@@ -50,7 +58,7 @@ from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Quaternion
 from nav2_msgs.action import NavigateToPose
 from nav2_msgs.srv import ClearEntireCostmap, LoadMap
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import Bool, Int32
+from std_msgs.msg import Int32, String
 
 try:
     from amr_msgs.msg import DetectionArray
@@ -267,21 +275,30 @@ class ElevatorDeliveryFinalWithManipulator(Node):
         self.declare_parameter("cmd_vel_topic", "/cmd_vel_nav")
 
         # ------------------------------------------------------------
-        # Manipulator handshake parameters
+        # Manipulator task manager parameters
         # ------------------------------------------------------------
-        # 자율주행 로봇 -> 로봇팔
-        self.declare_parameter("outside_btn_front_goal_topic", "/outside_btn_front_goal")
-        self.declare_parameter("inside_btn_front_goal_topic", "/inside_btn_front_goal")
-        self.declare_parameter("destination_goal_topic", "/destination_goal")
-        # 로봇팔 -> 자율주행 로봇
-        self.declare_parameter("manipulator_btn1_done_topic", "/manipulator_btn1_done")
-        self.declare_parameter("manipulator_btn2_done_topic", "/manipulator_btn2_done")
-        # goal 플래그 발행 정책
-        self.declare_parameter("manipulator_goal_publish_count", 10)
-        self.declare_parameter("manipulator_goal_publish_interval_sec", 0.2)
-        self.declare_parameter("manipulator_goal_republish_interval_sec", 1.0)
-        # 0.0이면 done 플래그를 받을 때까지 무한 대기
-        self.declare_parameter("manipulator_done_timeout_sec", 0.0)
+        # AMR -> Manipulator task manager
+        self.declare_parameter("manipulator_task_cmd_topic", "/manipulator_task_cmd")
+        # Manipulator task manager -> AMR
+        self.declare_parameter("manipulator_task_result_topic", "/manipulator_task_result")
+        self.declare_parameter("manipulator_task_state_topic", "/manipulator_task_state")
+
+        # AMR이 task manager로 보낼 작업 명령 문자열
+        self.declare_parameter("outside_button_task_cmd", "OUTSIDE_BTN_FRONT")
+        self.declare_parameter("inside_button_task_cmd", "INSIDE_BTN_FRONT")
+        self.declare_parameter("destination_task_cmd", "DESTINATION_UNLOAD")
+
+        # task manager가 완료 시 /manipulator_task_result로 보내야 하는 결과 문자열
+        self.declare_parameter("outside_button_expected_result", "OUTSIDE_BTN_DONE")
+        self.declare_parameter("inside_button_expected_result", "INSIDE_BTN_DONE")
+        self.declare_parameter("destination_expected_result", "UNLOAD_DONE")
+
+        # task command 발행 정책
+        self.declare_parameter("manipulator_cmd_publish_count", 10)
+        self.declare_parameter("manipulator_cmd_publish_interval_sec", 0.2)
+        self.declare_parameter("manipulator_cmd_republish_interval_sec", 1.0)
+        # 0.0이면 result를 받을 때까지 무한 대기
+        self.declare_parameter("manipulator_task_timeout_sec", 0.0)
 
         # ------------------------------------------------------------
         # Door detection parameters
@@ -365,30 +382,38 @@ class ElevatorDeliveryFinalWithManipulator(Node):
         self.elevator_start_topic = str(self.get_parameter("elevator_start_topic").value)
         self.cmd_vel_topic = str(self.get_parameter("cmd_vel_topic").value)
 
-        self.outside_btn_front_goal_topic = str(
-            self.get_parameter("outside_btn_front_goal_topic").value
+        self.manipulator_task_cmd_topic = str(
+            self.get_parameter("manipulator_task_cmd_topic").value
         )
-        self.inside_btn_front_goal_topic = str(
-            self.get_parameter("inside_btn_front_goal_topic").value
+        self.manipulator_task_result_topic = str(
+            self.get_parameter("manipulator_task_result_topic").value
         )
-        self.destination_goal_topic = str(self.get_parameter("destination_goal_topic").value)
-        self.manipulator_btn1_done_topic = str(
-            self.get_parameter("manipulator_btn1_done_topic").value
+        self.manipulator_task_state_topic = str(
+            self.get_parameter("manipulator_task_state_topic").value
         )
-        self.manipulator_btn2_done_topic = str(
-            self.get_parameter("manipulator_btn2_done_topic").value
+        self.outside_button_task_cmd = str(self.get_parameter("outside_button_task_cmd").value)
+        self.inside_button_task_cmd = str(self.get_parameter("inside_button_task_cmd").value)
+        self.destination_task_cmd = str(self.get_parameter("destination_task_cmd").value)
+        self.outside_button_expected_result = str(
+            self.get_parameter("outside_button_expected_result").value
         )
-        self.manipulator_goal_publish_count = max(
-            1, int(self.get_parameter("manipulator_goal_publish_count").value)
+        self.inside_button_expected_result = str(
+            self.get_parameter("inside_button_expected_result").value
         )
-        self.manipulator_goal_publish_interval_sec = max(
-            0.01, float(self.get_parameter("manipulator_goal_publish_interval_sec").value)
+        self.destination_expected_result = str(
+            self.get_parameter("destination_expected_result").value
         )
-        self.manipulator_goal_republish_interval_sec = max(
-            0.1, float(self.get_parameter("manipulator_goal_republish_interval_sec").value)
+        self.manipulator_cmd_publish_count = max(
+            1, int(self.get_parameter("manipulator_cmd_publish_count").value)
         )
-        self.manipulator_done_timeout_sec = max(
-            0.0, float(self.get_parameter("manipulator_done_timeout_sec").value)
+        self.manipulator_cmd_publish_interval_sec = max(
+            0.01, float(self.get_parameter("manipulator_cmd_publish_interval_sec").value)
+        )
+        self.manipulator_cmd_republish_interval_sec = max(
+            0.1, float(self.get_parameter("manipulator_cmd_republish_interval_sec").value)
+        )
+        self.manipulator_task_timeout_sec = max(
+            0.0, float(self.get_parameter("manipulator_task_timeout_sec").value)
         )
 
         self.door_max_valid_range = float(self.get_parameter("door_max_valid_range").value)
@@ -473,10 +498,11 @@ class ElevatorDeliveryFinalWithManipulator(Node):
         self.yolov8_process: Optional[subprocess.Popen] = None
         self.latest_detections: Dict[str, Tuple[float, List[Any]]] = {}
 
-        # Manipulator done flags
-        # 로봇팔이 Bool(data=True)를 발행하면 callback에서 True로 갱신된다.
-        self.manipulator_btn1_done = False
-        self.manipulator_btn2_done = False
+        # Manipulator task manager state
+        self.latest_manipulator_result: Optional[str] = None
+        self.latest_manipulator_state: Optional[str] = None
+        self.current_manipulator_task_cmd: Optional[str] = None
+        self.current_manipulator_expected_result: Optional[str] = None
 
         # 버튼 active latch. 한 번 2초 이상 active로 확정되면 목표 층 도착 전까지 유지한다.
         # key 예: elevator_btn_front:btndown, elevator_btn_inside:elevatorbtnunder1
@@ -494,15 +520,15 @@ class ElevatorDeliveryFinalWithManipulator(Node):
             10,
         )
         self.create_subscription(
-            Bool,
-            self.manipulator_btn1_done_topic,
-            self.manipulator_btn1_done_callback,
+            String,
+            self.manipulator_task_result_topic,
+            self.manipulator_task_result_callback,
             10,
         )
         self.create_subscription(
-            Bool,
-            self.manipulator_btn2_done_topic,
-            self.manipulator_btn2_done_callback,
+            String,
+            self.manipulator_task_state_topic,
+            self.manipulator_task_state_callback,
             10,
         )
 
@@ -529,26 +555,16 @@ class ElevatorDeliveryFinalWithManipulator(Node):
         )
         self.cmd_vel_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
 
-        # 메니퓰레이터 goal 플래그는 이벤트성 신호이므로 reliable + transient_local로 발행한다.
+        # 메니퓰레이터 task command는 이벤트성 신호이므로 reliable + transient_local로 발행한다.
         # 단, 로봇팔 subscriber가 volatile QoS여도 받을 수 있도록 일정 시간 반복 발행도 함께 수행한다.
-        self.manipulator_goal_qos = QoSProfile(depth=10)
-        self.manipulator_goal_qos.reliability = ReliabilityPolicy.RELIABLE
-        self.manipulator_goal_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self.manipulator_task_qos = QoSProfile(depth=10)
+        self.manipulator_task_qos.reliability = ReliabilityPolicy.RELIABLE
+        self.manipulator_task_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
 
-        self.outside_btn_front_goal_pub = self.create_publisher(
-            Bool,
-            self.outside_btn_front_goal_topic,
-            self.manipulator_goal_qos,
-        )
-        self.inside_btn_front_goal_pub = self.create_publisher(
-            Bool,
-            self.inside_btn_front_goal_topic,
-            self.manipulator_goal_qos,
-        )
-        self.destination_goal_pub = self.create_publisher(
-            Bool,
-            self.destination_goal_topic,
-            self.manipulator_goal_qos,
+        self.manipulator_task_cmd_pub = self.create_publisher(
+            String,
+            self.manipulator_task_cmd_topic,
+            self.manipulator_task_qos,
         )
 
         # ------------------------------------------------------------
@@ -582,12 +598,16 @@ class ElevatorDeliveryFinalWithManipulator(Node):
             f"target_floor_signal={self.target_floor_signal}, "
             f"scan_topic={self.scan_topic}, "
             f"cmd_vel_topic={self.cmd_vel_topic}, "
-            f"outside_btn_front_goal_topic={self.outside_btn_front_goal_topic}, "
-            f"inside_btn_front_goal_topic={self.inside_btn_front_goal_topic}, "
-            f"destination_goal_topic={self.destination_goal_topic}, "
-            f"manipulator_btn1_done_topic={self.manipulator_btn1_done_topic}, "
-            f"manipulator_btn2_done_topic={self.manipulator_btn2_done_topic}, "
-            f"manipulator_done_timeout_sec={self.manipulator_done_timeout_sec}, "
+            f"manipulator_task_cmd_topic={self.manipulator_task_cmd_topic}, "
+            f"manipulator_task_result_topic={self.manipulator_task_result_topic}, "
+            f"manipulator_task_state_topic={self.manipulator_task_state_topic}, "
+            f"outside_button_task_cmd={self.outside_button_task_cmd}, "
+            f"inside_button_task_cmd={self.inside_button_task_cmd}, "
+            f"destination_task_cmd={self.destination_task_cmd}, "
+            f"outside_button_expected_result={self.outside_button_expected_result}, "
+            f"inside_button_expected_result={self.inside_button_expected_result}, "
+            f"destination_expected_result={self.destination_expected_result}, "
+            f"manipulator_task_timeout_sec={self.manipulator_task_timeout_sec}, "
             f"camera_image_topic={self.camera_image_topic}, "
             f"button_detection_topics={self.button_detection_topics}, "
             f"person_detection_topics={self.person_detection_topics}, "
@@ -688,21 +708,75 @@ class ElevatorDeliveryFinalWithManipulator(Node):
     def amcl_pose_callback(self, msg: PoseWithCovarianceStamped):
         self.current_pose = msg.pose.pose
 
-    def manipulator_btn1_done_callback(self, msg: Bool):
-        if bool(msg.data):
-            if not self.manipulator_btn1_done:
-                self.get_logger().info(
-                    f"Received manipulator_btn1_done=True from {self.manipulator_btn1_done_topic}"
-                )
-            self.manipulator_btn1_done = True
+    def _normalize_task_text(self, text: str) -> str:
+        return str(text).strip()
 
-    def manipulator_btn2_done_callback(self, msg: Bool):
-        if bool(msg.data):
-            if not self.manipulator_btn2_done:
-                self.get_logger().info(
-                    f"Received manipulator_btn2_done=True from {self.manipulator_btn2_done_topic}"
-                )
-            self.manipulator_btn2_done = True
+    def _is_task_result_match(
+        self,
+        received: Optional[str],
+        expected_result: str,
+        task_cmd: str,
+    ) -> bool:
+        """
+        /manipulator_task_result 문자열 판정.
+
+        기본은 expected_result와 정확히 같은 문자열을 기대한다.
+        다만 task manager 구현 중 문자열 포맷이 조금 다를 수 있으므로
+        다음 형태도 성공으로 인정한다.
+        - expected_result
+        - <task_cmd>_done
+        - <task_cmd>:done / <task_cmd>:success / <task_cmd>:completed
+        - done:<task_cmd> / success:<task_cmd> / completed:<task_cmd>
+        - done / success / completed / true / 1
+        """
+        if received is None:
+            return False
+
+        data = self._normalize_task_text(received)
+        expected = self._normalize_task_text(expected_result)
+        cmd = self._normalize_task_text(task_cmd)
+
+        if not data:
+            return False
+        if data == expected:
+            return True
+
+        data_l = data.lower()
+        expected_l = expected.lower()
+        cmd_l = cmd.lower()
+
+        accepted = {
+            expected_l,
+            f"{cmd_l}_done",
+            f"{cmd_l}:done",
+            f"{cmd_l}:success",
+            f"{cmd_l}:completed",
+            f"done:{cmd_l}",
+            f"success:{cmd_l}",
+            f"completed:{cmd_l}",
+            "done",
+            "success",
+            "completed",
+            "true",
+            "1",
+        }
+        return data_l in accepted
+
+    def manipulator_task_result_callback(self, msg: String):
+        data = self._normalize_task_text(msg.data)
+        self.latest_manipulator_result = data
+        self.get_logger().info(
+            f"Received manipulator task result from {self.manipulator_task_result_topic}: "
+            f"data='{data}'"
+        )
+
+    def manipulator_task_state_callback(self, msg: String):
+        data = self._normalize_task_text(msg.data)
+        self.latest_manipulator_state = data
+        self.get_logger().info(
+            f"Received manipulator task state from {self.manipulator_task_state_topic}: "
+            f"data='{data}'"
+        )
 
     def _make_detection_callback(self, topic: str):
         def callback(msg: DetectionArray):
@@ -1601,89 +1675,92 @@ class ElevatorDeliveryFinalWithManipulator(Node):
         return True
 
     # ------------------------------------------------------------------
-    # Manipulator handshake
+    # Manipulator task manager handshake
     # ------------------------------------------------------------------
-    def publish_bool_flag(
+    def publish_task_command(
         self,
-        publisher,
-        flag_name: str,
-        value: bool = True,
+        task_cmd: str,
         repeat: int = 1,
         interval_sec: float = 0.0,
     ):
-        msg = Bool()
-        msg.data = bool(value)
+        """
+        /manipulator_task_cmd 로 std_msgs/String 작업 명령을 발행한다.
+
+        예)
+        - data: "OUTSIDE_BTN_FRONT"
+        - data: "INSIDE_BTN_FRONT"
+        - data: "DESTINATION_UNLOAD"
+
+        작업 명령을 해제하거나 이전 latched 값을 지울 때는 빈 문자열 data: ""를 발행한다. task manager는 빈 명령을 무시한다.
+        """
+        msg = String()
+        msg.data = str(task_cmd)
 
         repeat = max(1, int(repeat))
         for idx in range(repeat):
-            publisher.publish(msg)
+            self.manipulator_task_cmd_pub.publish(msg)
             self.get_logger().info(
-                f"Publish manipulator flag: {flag_name}={msg.data} "
-                f"({idx + 1}/{repeat})"
+                f"Publish manipulator task command to {self.manipulator_task_cmd_topic}: "
+                f"data='{msg.data}' ({idx + 1}/{repeat})"
             )
             if idx < repeat - 1 and interval_sec > 0.0:
                 self.spin_sleep(interval_sec)
 
-    def publish_manipulator_goal_only(self, publisher, goal_name: str):
+    def publish_manipulator_task_only(self, task_cmd: str):
         """
-        done 응답을 기다리지 않는 goal 플래그 발행.
+        result 응답을 기다리지 않는 작업 명령 발행.
         현재 요구사항에서는 B1 destination 도착 후 destination_goal에 사용한다.
         """
-        # 이전 latched True가 남아 있을 가능성을 줄이기 위해 False를 먼저 짧게 발행한 뒤 True를 발행한다.
-        self.publish_bool_flag(
-            publisher,
-            goal_name,
-            value=False,
+        self.publish_task_command(
+            "",
             repeat=2,
             interval_sec=0.05,
         )
         self.spin_sleep(0.1)
-        self.publish_bool_flag(
-            publisher,
-            goal_name,
-            value=True,
-            repeat=self.manipulator_goal_publish_count,
-            interval_sec=self.manipulator_goal_publish_interval_sec,
+        self.publish_task_command(
+            task_cmd,
+            repeat=self.manipulator_cmd_publish_count,
+            interval_sec=self.manipulator_cmd_publish_interval_sec,
         )
 
-    def send_manipulator_goal_and_wait(
+    def send_manipulator_task_and_wait(
         self,
-        publisher,
-        goal_name: str,
-        done_attr_name: str,
-        done_flag_name: str,
+        task_cmd: str,
+        expected_result: str,
     ) -> bool:
         """
-        자율주행 로봇 -> 로봇팔 goal 플래그 발행 후,
-        로봇팔 -> 자율주행 로봇 done 플래그가 들어올 때까지 대기한다.
+        AMR -> Manipulator:
+          /manipulator_task_cmd String(data=<task_cmd>) 발행
+
+        Manipulator -> AMR:
+          /manipulator_task_result String(data=<expected_result>) 수신 대기
 
         예)
-        - outside_btn_front_goal 발행
-        - manipulator_btn1_done 수신 대기
+        - task_cmd="OUTSIDE_BTN_FRONT"
+        - expected_result="OUTSIDE_BTN_DONE"
         """
-        setattr(self, done_attr_name, False)
+        self.current_manipulator_task_cmd = task_cmd
+        self.current_manipulator_expected_result = expected_result
+        self.latest_manipulator_result = None
 
         self.get_logger().info(
-            f"Manipulator handshake start: publish {goal_name}=True, "
-            f"wait {done_flag_name}=True"
+            f"Manipulator task handshake start: publish {self.manipulator_task_cmd_topic} "
+            f"String(data='{task_cmd}'), wait {self.manipulator_task_result_topic} "
+            f"String(data='{expected_result}')"
         )
 
-        # 이전 latched True가 남아 있을 가능성을 줄이고, 로봇팔 쪽 rising edge 감지를 돕기 위해
-        # False를 먼저 짧게 발행한 뒤 True를 반복 발행한다.
-        self.publish_bool_flag(
-            publisher,
-            goal_name,
-            value=False,
+        # 이전 latched command 문자열이 남아 있을 가능성을 줄이기 위해
+        # task manager가 무시하는 빈 문자열을 먼저 짧게 발행한다.
+        self.publish_task_command(
+            "",
             repeat=2,
             interval_sec=0.05,
         )
         self.spin_sleep(0.1)
-        self.publish_bool_flag(
-            publisher,
-            goal_name,
-            value=True,
-            repeat=self.manipulator_goal_publish_count,
-            interval_sec=self.manipulator_goal_publish_interval_sec,
+        self.publish_task_command(
+            task_cmd,
+            repeat=self.manipulator_cmd_publish_count,
+            interval_sec=self.manipulator_cmd_publish_interval_sec,
         )
 
         start_time = time.time()
@@ -1694,50 +1771,57 @@ class ElevatorDeliveryFinalWithManipulator(Node):
             rclpy.spin_once(self, timeout_sec=0.1)
             now = time.time()
 
-            if bool(getattr(self, done_attr_name)):
+            if self._is_task_result_match(
+                self.latest_manipulator_result,
+                expected_result,
+                task_cmd,
+            ):
                 self.get_logger().info(
-                    f"Manipulator handshake done: received {done_flag_name}=True. "
-                    f"Clear {goal_name}=False and continue navigation."
+                    f"Manipulator task done: received result='{self.latest_manipulator_result}'. "
+                    f"Clear command with empty String(data='') and continue navigation."
                 )
-                self.publish_bool_flag(
-                    publisher,
-                    goal_name,
-                    value=False,
+                self.publish_task_command(
+                    "",
                     repeat=3,
                     interval_sec=0.05,
                 )
+                self.current_manipulator_task_cmd = None
+                self.current_manipulator_expected_result = None
                 return True
 
             if (
-                self.manipulator_done_timeout_sec > 0.0
-                and now - start_time > self.manipulator_done_timeout_sec
+                self.manipulator_task_timeout_sec > 0.0
+                and now - start_time > self.manipulator_task_timeout_sec
             ):
                 self.get_logger().error(
-                    f"Timeout waiting for {done_flag_name}=True. "
-                    f"timeout={self.manipulator_done_timeout_sec:.1f}s"
+                    f"Timeout waiting for manipulator task result. "
+                    f"expected='{expected_result}', latest='{self.latest_manipulator_result}', "
+                    f"timeout={self.manipulator_task_timeout_sec:.1f}s"
                 )
-                self.publish_bool_flag(
-                    publisher,
-                    goal_name,
-                    value=False,
+                self.publish_task_command(
+                    "",
                     repeat=3,
                     interval_sec=0.05,
                 )
+                self.current_manipulator_task_cmd = None
+                self.current_manipulator_expected_result = None
                 return False
 
             # 로봇팔 subscriber가 volatile QoS이거나 순간적으로 연결이 늦는 경우를 대비해
-            # done이 올 때까지 goal=True를 주기적으로 재발행한다.
-            if now - last_republish_time >= self.manipulator_goal_republish_interval_sec:
-                msg = Bool()
-                msg.data = True
-                publisher.publish(msg)
+            # result가 올 때까지 task_cmd 문자열을 주기적으로 재발행한다.
+            if now - last_republish_time >= self.manipulator_cmd_republish_interval_sec:
+                msg = String()
+                msg.data = task_cmd
+                self.manipulator_task_cmd_pub.publish(msg)
                 last_republish_time = now
 
             if now - last_log_time > 1.0:
                 elapsed = now - start_time
                 self.get_logger().info(
-                    f"Waiting manipulator done: {done_flag_name}=False, "
-                    f"elapsed={elapsed:.1f}s, goal={goal_name}=True"
+                    f"Waiting manipulator task result: expected='{expected_result}', "
+                    f"latest_result='{self.latest_manipulator_result}', "
+                    f"latest_state='{self.latest_manipulator_state}', "
+                    f"elapsed={elapsed:.1f}s, command='{task_cmd}'"
                 )
                 last_log_time = now
 
@@ -1885,14 +1969,13 @@ class ElevatorDeliveryFinalWithManipulator(Node):
             if not self.go_to_pose(elevator_btn_front, f"{self.start_floor}F elevator_btn_front"):
                 return
 
-            # 3) elevator_btn_front 도착 시 로봇팔에 외부 버튼 조작 goal 플래그 전달
+            # 3) elevator_btn_front 도착 시 로봇팔 task manager에 외부 버튼 조작 task 전달
             # 기존: btn_down_active가 2초 이상 유지되면 다음 이동
-            # 변경: outside_btn_front_goal 발행 후 manipulator_btn1_done 수신 시 다음 이동
-            if not self.send_manipulator_goal_and_wait(
-                publisher=self.outside_btn_front_goal_pub,
-                goal_name="outside_btn_front_goal",
-                done_attr_name="manipulator_btn1_done",
-                done_flag_name="manipulator_btn1_done",
+            # 변경: /manipulator_task_cmd로 outside_button_task_cmd 발행 후
+            #       /manipulator_task_result에서 outside_button_expected_result 수신 시 다음 이동
+            if not self.send_manipulator_task_and_wait(
+                task_cmd=self.outside_button_task_cmd,
+                expected_result=self.outside_button_expected_result,
             ):
                 return
 
@@ -1946,14 +2029,13 @@ class ElevatorDeliveryFinalWithManipulator(Node):
             ):
                 return
 
-            # 8) elevator_btn_inside 도착 시 로봇팔에 내부 버튼 조작 goal 플래그 전달
+            # 8) elevator_btn_inside 도착 시 로봇팔 task manager에 내부 버튼 조작 task 전달
             # 기존: elevator_btn_under1_active가 2초 이상 유지되면 다음 이동
-            # 변경: inside_btn_front_goal 발행 후 manipulator_btn2_done 수신 시 다음 이동
-            if not self.send_manipulator_goal_and_wait(
-                publisher=self.inside_btn_front_goal_pub,
-                goal_name="inside_btn_front_goal",
-                done_attr_name="manipulator_btn2_done",
-                done_flag_name="manipulator_btn2_done",
+            # 변경: /manipulator_task_cmd로 inside_button_task_cmd 발행 후
+            #       /manipulator_task_result에서 inside_button_expected_result 수신 시 다음 이동
+            if not self.send_manipulator_task_and_wait(
+                task_cmd=self.inside_button_task_cmd,
+                expected_result=self.inside_button_expected_result,
             ):
                 return
 
@@ -2004,12 +2086,13 @@ class ElevatorDeliveryFinalWithManipulator(Node):
             if not self.go_to_pose(destination, f"{self.target_floor_key} destination"):
                 return
 
-            # 14) B1 destination 도착 시 로봇팔에 destination_goal 플래그 전달
-            # 현재 요구사항에서는 destination_goal에 대한 done 응답은 기다리지 않는다.
-            self.publish_manipulator_goal_only(
-                self.destination_goal_pub,
-                "destination_goal",
-            )
+            # 14) B1 destination 도착 시 로봇팔 task manager에 목적지 하역 작업 명령 전달
+            # task manager 기준: DESTINATION_UNLOAD -> UNLOAD_DONE
+            if not self.send_manipulator_task_and_wait(
+                task_cmd=self.destination_task_cmd,
+                expected_result=self.destination_expected_result,
+            ):
+                return
 
             # 15) destination 도착 안내 1회, 5초 뒤 간식 전달 안내 1회
             self.speaker.play_once(

@@ -3,7 +3,13 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, TimerAction, ExecuteProcess
+from launch.actions import (
+    IncludeLaunchDescription,
+    TimerAction,
+    ExecuteProcess,
+    RegisterEventHandler,
+)
+from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 from launch_ros.actions import Node
@@ -38,9 +44,11 @@ def generate_launch_description():
     # RealSense D435 launch
     # =========================================================
     # NOTE:
-    # - Launch argument에서는 pointcloud.enable 사용
-    # - Jetson 런타임에서는 pointcloud__neon_ 파라미터가 실제로 생성될 수 있음
-    # - 따라서 아래 TimerAction에서 ros2 param set으로 neon 파라미터를 직접 설정
+    # - Jetson/ARM 환경에서는   ointcloud 파라미터가
+    #   pointcloud__neon_.enable 형태로 생성될 수 있음.
+    # - pointcloud를 launch argument에서 바로 켜면 stream filter 설정 전에
+    #   먼저 활성화될 수 있으므로, 여기서는 끄고 아래 설정 블록에서
+    #   stream_filter -> stream_index_filter -> enable 순서로 켠다.
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(realsense_launch_path),
         launch_arguments={
@@ -50,7 +58,7 @@ def generate_launch_description():
             'enable_depth': 'true',
             'enable_color': 'true',
 
-            'pointcloud.enable': 'true',
+            'pointcloud.enable': 'false',
             'align_depth.enable': 'true',
             'enable_sync': 'true',
         }.items()
@@ -59,36 +67,67 @@ def generate_launch_description():
     # =========================================================
     # Jetson NEON pointcloud runtime parameter setting
     # =========================================================
+    # NOTE:
+    # - 기존처럼 ros2 param set 3개를 동시에 따로 실행하지 않는다.
+    # - /camera/camera 노드와 pointcloud__neon_ 파라미터가 실제로 생길 때까지 기다린다.
+    # - stream_filter, stream_index_filter를 먼저 설정한 뒤 enable을 마지막에 true로 바꾼다.
+    # - 설정 후 ros2 param get으로 적용 여부를 출력한다.
+    set_neon_pointcloud_process = ExecuteProcess(
+        cmd=[
+            'bash',
+            '-lc',
+            r'''
+set -u
+
+NODE="/camera/camera"
+PC_PREFIX="pointcloud__neon_"
+
+echo "[pcfg] waiting for RealSense node and Jetson NEON pointcloud parameters..."
+
+FOUND="false"
+
+for i in $(seq 1 60); do
+    if ros2 param list "$NODE" >/tmp/realsense_params.txt 2>/dev/null; then
+        if grep -q "${PC_PREFIX}.enable" /tmp/realsense_params.txt; then
+            FOUND="true"
+            echo "[pcfg] found ${PC_PREFIX} parameters"
+            break
+        fi
+    fi
+
+    echo "[pcfg] waiting... ${i}/60"
+    sleep 0.5
+done
+
+if [ "$FOUND" != "true" ]; then
+    echo "[pcfg] ERROR: ${PC_PREFIX}.enable was not found"
+    echo "[pcfg] available pointcloud parameters:"
+    ros2 param list "$NODE" 2>/dev/null | grep pointcloud || true
+    exit 1
+fi
+
+echo "[pcfg] setting pointcloud stream parameters first"
+ros2 param set "$NODE" "${PC_PREFIX}.stream_filter" 2
+ros2 param set "$NODE" "${PC_PREFIX}.stream_index_filter" 0
+
+echo "[pcfg] enabling Jetson NEON pointcloud"
+ros2 param set "$NODE" "${PC_PREFIX}.enable" true
+
+echo "[pcfg] verification"
+ros2 param get "$NODE" "${PC_PREFIX}.stream_filter"
+ros2 param get "$NODE" "${PC_PREFIX}.stream_index_filter"
+ros2 param get "$NODE" "${PC_PREFIX}.enable"
+
+echo "[pcfg] Jetson NEON pointcloud configuration done"
+'''
+        ],
+        output='screen'
+    )
+
     set_neon_pointcloud_params = TimerAction(
         period=4.0,
         actions=[
-            ExecuteProcess(
-                cmd=[
-                    'ros2', 'param', 'set',
-                    '/camera/camera',
-                    'pointcloud__neon_.enable',
-                    'true'
-                ],
-                output='screen'
-            ),
-            ExecuteProcess(
-                cmd=[
-                    'ros2', 'param', 'set',
-                    '/camera/camera',
-                    'pointcloud__neon_.stream_filter',
-                    '2'
-                ],
-                output='screen'
-            ),
-            ExecuteProcess(
-                cmd=[
-                    'ros2', 'param', 'set',
-                    '/camera/camera',
-                    'pointcloud__neon_.stream_index_filter',
-                    '0'
-                ],
-                output='screen'
-            ),
+            set_neon_pointcloud_process
         ]
     )
 
@@ -131,6 +170,38 @@ def generate_launch_description():
     )
 
     # =========================================================
+    # Start perception nodes after pointcloud parameter setup
+    # =========================================================
+    # NOTE:
+    # - TimerAction만으로는 순서를 완전히 보장하기 어렵다.
+    # - 따라서 pointcloud 설정 프로세스가 끝난 뒤 인식 노드를 실행한다.
+    start_perception_after_pointcloud_setup = RegisterEventHandler(
+        OnProcessExit(
+            target_action=set_neon_pointcloud_process,
+            on_exit=[
+                TimerAction(
+                    period=1.0,
+                    actions=[
+                        yolov8_node
+                    ]
+                ),
+                TimerAction(
+                    period=2.0,
+                    actions=[
+                        object_distance_node
+                    ]
+                ),
+                TimerAction(
+                    period=3.0,
+                    actions=[
+                        yolov8_debug_node
+                    ]
+                ),
+            ]
+        )
+    )
+
+    # =========================================================
     # Launch order
     # =========================================================
     return LaunchDescription([
@@ -142,28 +213,9 @@ def generate_launch_description():
             ]
         ),
 
-        # 2. RealSense 노드가 뜬 뒤 Jetson NEON pointcloud 파라미터 직접 설정
+        # 2. RealSense 노드와 pointcloud__neon_ 파라미터가 준비될 때까지 대기 후 설정
         set_neon_pointcloud_params,
 
-        # 3. 인식 노드들은 RealSense + pointcloud 설정 이후 실행
-        TimerAction(
-            period=6.0,
-            actions=[
-                yolov8_node
-            ]
-        ),
-
-        TimerAction(
-            period=8.0,
-            actions=[
-                object_distance_node
-            ]
-        ),
-
-        TimerAction(
-            period=9.0,
-            actions=[
-                yolov8_debug_node
-            ]
-        ),
+        # 3. pointcloud 설정 프로세스가 종료된 뒤 인식 노드 실행
+        start_perception_after_pointcloud_setup,
     ])
