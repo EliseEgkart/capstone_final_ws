@@ -45,8 +45,8 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(realsense_launch_path),
         launch_arguments={
             'depth_module.depth_profile': '640x480x15',
-            'rgb_camera.color_profile': '640x480x15',
-
+            #'rgb_camera.color_profile': '640x480x15',
+            'rgb_camera.color_profile': '1280x720x15',
             'enable_depth': 'true',
             'enable_color': 'true',
 
