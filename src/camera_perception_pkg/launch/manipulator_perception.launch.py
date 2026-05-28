@@ -74,7 +74,7 @@ def generate_launch_description():
         'enable_color': 'true',
         'align_depth.enable': 'true',
         'enable_sync': 'true',
-        'pointcloud.enable': 'false',
+        'pointcloud.enable': 'true',
         'publish_tf': 'false',
         'tf_publish_rate': '0.0',
         'initial_reset': 'true',
