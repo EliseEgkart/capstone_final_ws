@@ -5,6 +5,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    GroupAction,
     IncludeLaunchDescription,
     TimerAction,
     ExecuteProcess,
@@ -57,42 +58,50 @@ def generate_launch_description():
     # =========================================================
     # RealSense D435 launch
     # =========================================================
-    # NOTE:
-    # - Do not pass rgb_camera.power_line_frequency here.
-    #   Some realsense2_camera rs_launch.py versions do not declare it as a
-    #   launch argument and will print "Parameter is not supported".
-    # - The value is forced at runtime by the setup process below.
+    # IMPORTANT:
     # - Do not pass use_yolo_debug to RealSense.
-    realsense_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(realsense_launch_path),
-        launch_arguments={
-            'depth_module.depth_profile': '640x480x15',
-            'rgb_camera.color_profile': '640x480x15',
+    # - Do not handle rgb_camera.power_line_frequency here.
+    #   That warning is not critical for this task and is intentionally ignored.
+    # - GroupAction(scoped=True, forwarding=False) prevents parent launch args
+    #   from leaking into rs_launch.py.
+    realsense_launch_arguments = {
+        'depth_module.depth_profile': '640x480x15',
+        'rgb_camera.color_profile': '640x480x15',
 
-            'enable_depth': 'true',
-            'enable_color': 'true',
-            'align_depth.enable': 'true',
-            'enable_sync': 'true',
+        'enable_depth': 'true',
+        'enable_color': 'true',
+        'align_depth.enable': 'true',
+        'enable_sync': 'true',
 
-            # Jetson pointcloud is enabled later after stream_filter/index setup.
-            'pointcloud.enable': 'false',
+        # Jetson pointcloud is enabled later after stream_filter/index setup.
+        'pointcloud.enable': 'false',
 
-            # USB/device recovery options.
-            'initial_reset': 'true',
-            'wait_for_device_timeout': '-1.0',
-            'reconnect_timeout': '6.0',
-        }.items()
+        # USB/device recovery options.
+        'initial_reset': 'true',
+        'wait_for_device_timeout': '-1.0',
+        'reconnect_timeout': '6.0',
+    }
+
+    realsense_launch = GroupAction(
+        scoped=True,
+        forwarding=False,
+        actions=[
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(realsense_launch_path),
+                launch_arguments=realsense_launch_arguments.items()
+            )
+        ]
     )
 
     # =========================================================
     # RealSense runtime setup
     # =========================================================
     # This process waits until /camera/camera is alive, then:
-    #   1. forces rgb_camera.power_line_frequency to 2
-    #   2. enables Jetson NEON pointcloud safely
-    #   3. waits until color and aligned depth topics exist
-    # After this process exits, object_distance_node, yolov8_node,
-    # and optionally yolov8_debug_node are started in a staggered order.
+    #   1. enables Jetson NEON pointcloud safely
+    #   2. waits until color and aligned depth topics exist
+    #
+    # NOTE:
+    # - rgb_camera.power_line_frequency is intentionally not handled here.
     realsense_runtime_setup_process = ExecuteProcess(
         cmd=[
             'bash',
@@ -133,8 +142,8 @@ set_param_retry() {
     PARAM_VALUE="$2"
     REQUIRED="$3"
 
-    for j in $(seq 1 10); do
-        echo "[rs_setup] set ${PARAM_NAME}=${PARAM_VALUE} try ${j}/10"
+    for j in $(seq 1 6); do
+        echo "[rs_setup] set ${PARAM_NAME}=${PARAM_VALUE} try ${j}/6"
         if timeout "${SET_TIMEOUT}" ros2 param set "$NODE" "${PARAM_NAME}" "${PARAM_VALUE}"; then
             return 0
         fi
@@ -150,10 +159,6 @@ set_param_retry() {
     echo "[rs_setup] WARN: failed to set optional parameter ${PARAM_NAME}"
     return 0
 }
-
-# Force power line frequency after the RealSense node exists.
-# This avoids passing unsupported launch arguments to rs_launch.py.
-set_param_retry "rgb_camera.power_line_frequency" 2 "optional"
 
 echo "[rs_setup] checking pointcloud parameter prefix..."
 

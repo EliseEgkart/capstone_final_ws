@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import copy
 import math
 import re
 import threading
@@ -97,6 +98,10 @@ class EbimuPublisher(Node):
         self.declare_parameter('angular_velocity_covariance_diag', 0.02)
         self.declare_parameter('linear_acceleration_covariance_diag', 0.20)
 
+        # None / 파싱 실패 시 마지막 정상 IMU를 재발행할 최대 횟수
+        # 예: 100Hz면 20회 = 약 0.2초, 50Hz면 약 0.4초
+        self.declare_parameter('max_republish_count', 20)
+
         self.port = str(self.get_parameter('port').value)
         self.baudrate = int(self.get_parameter('baudrate').value)
         self.legacy_topic_name = str(self.get_parameter('legacy_topic_name').value)
@@ -122,6 +127,8 @@ class EbimuPublisher(Node):
             self.get_parameter('linear_acceleration_covariance_diag').value
         )
 
+        self.max_republish_count = int(self.get_parameter('max_republish_count').value)
+
         qos = QoSProfile(depth=50)
         self.raw_pub = self.create_publisher(String, self.legacy_topic_name, qos)
         self.imu_pub = self.create_publisher(Imu, self.imu_topic_name, qos)
@@ -129,6 +136,16 @@ class EbimuPublisher(Node):
         self.serial_handle: Optional[serial.Serial] = None
         self.running = True
         self.last_parse_warn_time = 0.0
+
+        # 마지막 정상 IMU 저장용
+        self.last_imu_msg: Optional[Imu] = None
+
+        # 연속 파싱 실패 / 재발행 횟수
+        self.bad_frame_count = 0
+        self.republish_count = 0
+        self.last_republish_warn_time = 0.0
+        self.last_no_valid_imu_warn_time = 0.0
+        self.last_republish_stop_warn_time = 0.0
 
         self.read_thread = threading.Thread(target=self.read_loop, daemon=True)
         self.read_thread.start()
@@ -278,6 +295,78 @@ class EbimuPublisher(Node):
 
         return msg
 
+    def publish_valid_imu(self, imu_msg: Imu) -> None:
+        """
+        정상적으로 파싱된 IMU를 publish하고 마지막 정상 IMU로 저장한다.
+        """
+        self.imu_pub.publish(imu_msg)
+
+        # 이후 None / 파싱 실패가 들어왔을 때 재사용하기 위해 깊은 복사로 저장
+        self.last_imu_msg = copy.deepcopy(imu_msg)
+
+        # 정상 프레임이 들어왔으므로 실패/재발행 카운터 초기화
+        self.bad_frame_count = 0
+        self.republish_count = 0
+
+    def republish_last_imu(self, reason: str) -> None:
+        """
+        None, empty line, parsing failure 등이 발생했을 때
+        마지막 정상 IMU 값을 현재 timestamp로 갱신해서 다시 publish한다.
+        단, 무한히 재발행하지 않도록 max_republish_count까지만 허용한다.
+        """
+        self.bad_frame_count += 1
+        now = time.time()
+
+        if self.last_imu_msg is None:
+            if now - self.last_no_valid_imu_warn_time > 5.0:
+                self.get_logger().warning(
+                    f'No valid IMU message has been received yet. '
+                    f'Cannot republish last IMU. reason={reason}'
+                )
+                self.last_no_valid_imu_warn_time = now
+            return
+
+        if self.republish_count >= self.max_republish_count:
+            if now - self.last_republish_stop_warn_time > 5.0:
+                self.get_logger().warning(
+                    f'IMU input has been invalid for too long. '
+                    f'Stop republishing last IMU. '
+                    f'bad_frame_count={self.bad_frame_count}, '
+                    f'republish_count={self.republish_count}, '
+                    f'max_republish_count={self.max_republish_count}, '
+                    f'reason={reason}'
+                )
+                self.last_republish_stop_warn_time = now
+            return
+
+        try:
+            msg = copy.deepcopy(self.last_imu_msg)
+
+            # EKF가 오래된 timestamp로 판단하지 않도록 현재 시간으로 갱신
+            msg.header.stamp = self.get_clock().now().to_msg()
+
+            self.imu_pub.publish(msg)
+            self.republish_count += 1
+
+            if now - self.last_republish_warn_time > 5.0:
+                self.get_logger().warning(
+                    f'Republishing last valid IMU because current EBIMU frame is invalid. '
+                    f'republish_count={self.republish_count}/'
+                    f'{self.max_republish_count}, reason={reason}'
+                )
+                self.last_republish_warn_time = now
+
+        except Exception as exc:
+            self.get_logger().warning(f'Failed to republish last valid IMU: {exc}')
+
+    def publish_raw_line(self, raw_line: str) -> None:
+        """
+        기존 elevator_floor_node 호환을 위해 raw ebimu_data는 계속 publish한다.
+        """
+        raw_msg = String()
+        raw_msg.data = raw_line
+        self.raw_pub.publish(raw_msg)
+
     def read_loop(self) -> None:
         while self.running:
             if self.serial_handle is None or not self.serial_handle.is_open:
@@ -287,26 +376,36 @@ class EbimuPublisher(Node):
 
             try:
                 raw = self.serial_handle.readline()
-                if not raw:
+
+                if raw is None or len(raw) == 0:
+                    # serial timeout 또는 순간적인 empty read
+                    # 기존 코드는 그냥 continue였지만, 여기서는 마지막 정상 IMU를 재발행
+                    self.republish_last_imu('empty serial read')
                     time.sleep(0.005)
                     continue
 
                 raw_line = raw.decode('utf-8', errors='ignore')
-                if not raw_line:
+
+                if raw_line is None or raw_line == '':
+                    self.republish_last_imu('empty decoded line')
                     continue
 
-                raw_msg = String()
-                raw_msg.data = raw_line
-                self.raw_pub.publish(raw_msg)
+                # 기존 층수 계산 노드 호환용 raw topic은 계속 publish
+                self.publish_raw_line(raw_line)
 
                 imu_msg = self.build_imu_msg(raw_line)
+
                 if imu_msg is not None:
-                    self.imu_pub.publish(imu_msg)
+                    self.publish_valid_imu(imu_msg)
                 else:
+                    # roll/pitch/yaw 파싱 실패 시 마지막 정상 IMU 재발행
+                    self.republish_last_imu('failed to parse roll/pitch/yaw from EBIMU line')
+
                     now = time.time()
                     if now - self.last_parse_warn_time > 5.0:
                         self.get_logger().warning(
                             'Could not parse roll/pitch/yaw for /imu/data from the current EBIMU line. '
+                            'Republishing the last valid IMU message if available. '
                             'Raw ebimu_data is still being published. '
                             'If your EBIMU output format is not *roll,pitch,yaw, change rpy_field_indices.'
                         )
@@ -314,16 +413,24 @@ class EbimuPublisher(Node):
 
             except SerialException as exc:
                 self.get_logger().error(f'EBIMU serial read error: {exc}')
+
+                # serial exception 순간에도 마지막 정상 IMU를 짧게 재발행
+                self.republish_last_imu(f'serial exception: {exc}')
+
                 try:
                     if self.serial_handle is not None:
                         self.serial_handle.close()
                 except Exception:
                     pass
+
                 self.serial_handle = None
                 time.sleep(1.0)
 
             except Exception as exc:
+                # 예상치 못한 예외가 발생해도 노드를 죽이지 않고 마지막 정상 IMU를 재발행
                 self.get_logger().warning(f'Unexpected EBIMU handling error: {exc}')
+                self.republish_last_imu(f'unexpected exception: {exc}')
+                time.sleep(0.01)
 
     def destroy_node(self):
         self.running = False
@@ -334,8 +441,11 @@ class EbimuPublisher(Node):
         except Exception:
             pass
 
-        if self.read_thread.is_alive():
-            self.read_thread.join(timeout=1.0)
+        try:
+            if self.read_thread.is_alive():
+                self.read_thread.join(timeout=1.0)
+        except Exception:
+            pass
 
         return super().destroy_node()
 
@@ -343,13 +453,19 @@ class EbimuPublisher(Node):
 def main(args=None) -> None:
     rclpy.init(args=args)
     node = EbimuPublisher()
+
     try:
         rclpy.spin(node)
+
     except KeyboardInterrupt:
         pass
+
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+
+        # Ctrl+C / launch 종료 과정에서 이미 shutdown된 경우 중복 shutdown 방지
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
