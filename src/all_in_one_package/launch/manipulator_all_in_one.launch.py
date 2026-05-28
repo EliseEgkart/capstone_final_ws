@@ -208,7 +208,7 @@ def generate_launch_description():
         ),
 
         TimerAction(
-            period=18.0,
+            period=55.0,
             actions=[
                 LogInfo(msg='[all_in_one] Starting AMR navigator last...'),
                 amr_navigator_node,
