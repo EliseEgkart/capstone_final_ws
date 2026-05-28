@@ -117,7 +117,7 @@ def generate_launch_description():
                 # 1 = depth stream as pointcloud source.
                 # 2 = color texture, unstable on current Jetson setup.
                 # 0 = any, caused "Process - Any" warning.
-                'pointcloud__neon_.stream_filter': 1,
+                'pointcloud__neon_.stream_filter': 2,
                 'pointcloud__neon_.stream_index_filter': 0,
 
                 # Keep pointcloud generation robust even without color texture.

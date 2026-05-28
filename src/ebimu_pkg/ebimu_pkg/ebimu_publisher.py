@@ -74,7 +74,6 @@ class EbimuPublisher(Node):
 
         # 기존 층수 계산 노드 호환용 raw topic
         self.declare_parameter('legacy_topic_name', 'ebimu_data')
-
         # EKF용 IMU topic
         self.declare_parameter('imu_topic_name', '/imu/data')
 
@@ -129,14 +128,7 @@ class EbimuPublisher(Node):
 
         self.serial_handle: Optional[serial.Serial] = None
         self.running = True
-
-        # 경고 로그가 너무 많이 찍히지 않도록 시간 제한
         self.last_parse_warn_time = 0.0
-        self.last_empty_warn_time = 0.0
-        self.last_exception_warn_time = 0.0
-
-        # 깨진 프레임 개수 확인용
-        self.bad_frame_count = 0
 
         self.read_thread = threading.Thread(target=self.read_loop, daemon=True)
         self.read_thread.start()
@@ -185,8 +177,8 @@ class EbimuPublisher(Node):
     def token_to_float(self, token: str) -> Optional[float]:
         try:
             return float(token)
-        except (ValueError, TypeError):
-            match = FLOAT_RE.search(str(token))
+        except ValueError:
+            match = FLOAT_RE.search(token)
             if match is None:
                 return None
             try:
@@ -202,19 +194,14 @@ class EbimuPublisher(Node):
         for idx in indices:
             if idx < 0 or idx >= len(tokens):
                 return None
-
             value = self.token_to_float(tokens[idx])
             if value is None:
                 return None
-
             values.append(value)
 
         return values[0], values[1], values[2]
 
     def build_imu_msg(self, raw_line: str) -> Optional[Imu]:
-        if raw_line is None:
-            return None
-
         line = raw_line.strip()
         if not line:
             return None
@@ -291,33 +278,6 @@ class EbimuPublisher(Node):
 
         return msg
 
-    def publish_raw_line(self, raw_line: str) -> None:
-        """
-        기존 elevator_floor_node 호환을 위해 raw ebimu_data는 계속 publish한다.
-        """
-        raw_msg = String()
-        raw_msg.data = raw_line
-        self.raw_pub.publish(raw_msg)
-
-    def skip_bad_imu_frame(self, reason: str) -> None:
-        """
-        None / empty read / decode 실패 / 파싱 실패 프레임은 /imu/data로 publish하지 않는다.
-
-        중요한 점:
-        - 마지막 정상 IMU를 재발행하지 않는다.
-        - EKF가 가짜 최신 IMU 값을 믿지 않도록 한다.
-        - 노드는 죽지 않고 다음 serial line을 계속 기다린다.
-        """
-        self.bad_frame_count += 1
-        now = time.time()
-
-        if now - self.last_parse_warn_time > 5.0:
-            self.get_logger().warning(
-                f'Invalid EBIMU frame skipped. '
-                f'bad_frame_count={self.bad_frame_count}, reason={reason}'
-            )
-            self.last_parse_warn_time = now
-
     def read_loop(self) -> None:
         while self.running:
             if self.serial_handle is None or not self.serial_handle.is_open:
@@ -327,67 +287,43 @@ class EbimuPublisher(Node):
 
             try:
                 raw = self.serial_handle.readline()
-
-                if raw is None or len(raw) == 0:
-                    # serial timeout 또는 순간적인 empty read
-                    # /imu/data는 publish하지 않고 다음 프레임을 기다린다.
-                    now = time.time()
-                    if now - self.last_empty_warn_time > 5.0:
-                        self.skip_bad_imu_frame('empty serial read')
-                        self.last_empty_warn_time = now
+                if not raw:
                     time.sleep(0.005)
                     continue
 
-                try:
-                    raw_line = raw.decode('utf-8', errors='ignore')
-                except Exception as exc:
-                    self.skip_bad_imu_frame(f'decode failed: {exc}')
+                raw_line = raw.decode('utf-8', errors='ignore')
+                if not raw_line:
                     continue
 
-                if raw_line is None or raw_line.strip() == '':
-                    self.skip_bad_imu_frame('empty decoded line')
-                    continue
-
-                # 기존 층수 계산 노드 호환용 raw topic은 계속 publish
-                try:
-                    self.publish_raw_line(raw_line)
-                except Exception as exc:
-                    # raw topic publish 실패가 IMU node 전체를 죽이면 안 됨
-                    self.get_logger().warning(f'Failed to publish raw EBIMU line: {exc}')
+                raw_msg = String()
+                raw_msg.data = raw_line
+                self.raw_pub.publish(raw_msg)
 
                 imu_msg = self.build_imu_msg(raw_line)
-
                 if imu_msg is not None:
                     self.imu_pub.publish(imu_msg)
-
-                    # 정상 IMU가 들어왔으므로 bad frame count 초기화
-                    self.bad_frame_count = 0
                 else:
-                    # 핵심 수정:
-                    # 마지막 정상 IMU를 재발행하지 않고, 깨진 프레임만 버린다.
-                    self.skip_bad_imu_frame('failed to parse roll/pitch/yaw from EBIMU line')
+                    now = time.time()
+                    if now - self.last_parse_warn_time > 5.0:
+                        self.get_logger().warning(
+                            'Could not parse roll/pitch/yaw for /imu/data from the current EBIMU line. '
+                            'Raw ebimu_data is still being published. '
+                            'If your EBIMU output format is not *roll,pitch,yaw, change rpy_field_indices.'
+                        )
+                        self.last_parse_warn_time = now
 
             except SerialException as exc:
                 self.get_logger().error(f'EBIMU serial read error: {exc}')
-
                 try:
                     if self.serial_handle is not None:
                         self.serial_handle.close()
                 except Exception:
                     pass
-
                 self.serial_handle = None
                 time.sleep(1.0)
 
             except Exception as exc:
-                # 예상치 못한 예외가 발생해도 노드를 죽이지 않고 다음 프레임을 계속 기다림
-                now = time.time()
-                if now - self.last_exception_warn_time > 5.0:
-                    self.get_logger().warning(f'Unexpected EBIMU handling error skipped: {exc}')
-                    self.last_exception_warn_time = now
-
-                self.skip_bad_imu_frame(f'unexpected exception: {exc}')
-                time.sleep(0.01)
+                self.get_logger().warning(f'Unexpected EBIMU handling error: {exc}')
 
     def destroy_node(self):
         self.running = False
@@ -398,11 +334,8 @@ class EbimuPublisher(Node):
         except Exception:
             pass
 
-        try:
-            if self.read_thread.is_alive():
-                self.read_thread.join(timeout=1.0)
-        except Exception:
-            pass
+        if self.read_thread.is_alive():
+            self.read_thread.join(timeout=1.0)
 
         return super().destroy_node()
 
@@ -410,19 +343,13 @@ class EbimuPublisher(Node):
 def main(args=None) -> None:
     rclpy.init(args=args)
     node = EbimuPublisher()
-
     try:
         rclpy.spin(node)
-
     except KeyboardInterrupt:
         pass
-
     finally:
         node.destroy_node()
-
-        # Ctrl+C / launch 종료 과정에서 이미 shutdown된 경우 중복 shutdown 방지
-        if rclpy.ok():
-            rclpy.shutdown()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':
