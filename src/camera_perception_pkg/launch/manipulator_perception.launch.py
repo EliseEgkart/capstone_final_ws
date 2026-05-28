@@ -4,27 +4,42 @@ from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import (
-    IncludeLaunchDescription,
-    TimerAction,
+    DeclareLaunchArgument,
     ExecuteProcess,
     RegisterEventHandler,
+    TimerAction,
 )
+from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
     # =========================================================
-    # Package paths
+    # Launch arguments
     # =========================================================
-    realsense_share = get_package_share_directory('realsense2_camera')
-    camera_perception_share = get_package_share_directory('camera_perception_pkg')
+    use_yolo_debug = LaunchConfiguration('use_yolo_debug')
+    initial_reset = LaunchConfiguration('initial_reset')
+
+    declare_use_yolo_debug = DeclareLaunchArgument(
+        'use_yolo_debug',
+        default_value='true',
+        description='If true, start yolov8_debug_node. Set false to reduce Jetson GPU/CPU load.'
+    )
+
+    declare_initial_reset = DeclareLaunchArgument(
+        'initial_reset',
+        default_value='true',
+        description='If true, reset RealSense once during startup for USB recovery.'
+    )
 
     # =========================================================
-    # Config paths
+    # Package paths / configs
     # =========================================================
+    camera_perception_share = get_package_share_directory('camera_perception_pkg')
+
     perception_config = os.path.join(
         camera_perception_share,
         'config',
@@ -32,157 +47,81 @@ def generate_launch_description():
     )
 
     # =========================================================
-    # RealSense launch path
+    # RealSense D435 node - Jetson NEON direct mode
     # =========================================================
-    realsense_launch_path = os.path.join(
-        realsense_share,
-        'launch',
-        'rs_launch.py'
+    # IMPORTANT:
+    # - Do not use rs_launch.py for pointcloud on Jetson NEON path.
+    # - Some Jetson builds expose pointcloud parameters as pointcloud__neon_.*
+    # - Directly launching realsense2_camera_node with --ros-args style
+    #   parameters is the most reliable way to apply pointcloud__neon_ params
+    #   before the node starts.
+    # - publish_tf=false protects the manipulator TF tree because camera frames
+    #   are already provided by URDF / robot_state_publisher.
+    realsense_node = Node(
+        package='realsense2_camera',
+        executable='realsense2_camera_node',
+        namespace='camera',
+        name='camera',
+        output='screen',
+        emulate_tty=True,
+        parameters=[
+            {
+                # Stream profiles
+                'depth_module.depth_profile': '640x480x15',
+                'rgb_camera.color_profile': '640x480x15',
+
+                # Required streams
+                'enable_depth': True,
+                'enable_color': True,
+                'align_depth.enable': True,
+                'enable_sync': True,
+
+                # Jetson / ARM NEON pointcloud parameters
+                'pointcloud__neon_.enable': True,
+                'pointcloud__neon_.stream_filter': 2,
+                'pointcloud__neon_.stream_index_filter': 0,
+                'pointcloud__neon_.allow_no_texture_points': True,
+                'pointcloud__neon_.ordered_pc': False,
+
+                # TF safety: robot/manipulator URDF owns camera_link transform.
+                'publish_tf': False,
+                'tf_publish_rate': 0.0,
+
+                # USB/device recovery
+                'initial_reset': initial_reset,
+                'wait_for_device_timeout': -1.0,
+                'reconnect_timeout': 6.0,
+            }
+        ]
     )
 
     # =========================================================
-    # RealSense D435 launch
+    # Topic gate
     # =========================================================
-    # NOTE:
-    # - Do not pass rgb_camera.power_line_frequency here.
-    #   Some realsense2_camera rs_launch.py versions do not declare it as a
-    #   launch argument and will print "Parameter is not supported".
-    # - The value is forced at runtime by the setup process below.
-    # - Do not pass any debug-only launch argument here.
-    realsense_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(realsense_launch_path),
-        launch_arguments={
-            'depth_module.depth_profile': '640x480x15',
-            'rgb_camera.color_profile': '640x480x15',
-
-            'enable_depth': 'true',
-            'enable_color': 'true',
-            'align_depth.enable': 'true',
-            'enable_sync': 'true',
-
-            # Jetson pointcloud is enabled later after stream_filter/index setup.
-            'pointcloud.enable': 'false',
-
-            # USB/device recovery options.
-            'initial_reset': 'true',
-            'wait_for_device_timeout': '-1.0',
-            'reconnect_timeout': '6.0',
-        }.items()
-    )
-
-    # =========================================================
-    # RealSense runtime setup
-    # =========================================================
-    # This process waits until /camera/camera is alive, then:
-    #   1. forces rgb_camera.power_line_frequency to 2
-    #   2. enables Jetson NEON pointcloud safely
-    #   3. waits until color and aligned depth topics exist
-    # After this process exits, object_distance_node, yolov8_node,
-    # and yolov8_debug_node are started in a staggered order.
-    realsense_runtime_setup_process = ExecuteProcess(
+    # This checks actual camera output topics only.
+    # It does NOT query /camera/camera parameter services.
+    wait_camera_topics_process = ExecuteProcess(
         cmd=[
             'bash',
             '-lc',
             """
 set -u
 
-NODE="/camera/camera"
-LIST_TIMEOUT="2s"
-SET_TIMEOUT="3s"
-GET_TIMEOUT="2s"
-
 COLOR_TOPIC="/camera/camera/color/image_raw"
 DEPTH_TOPIC="/camera/camera/aligned_depth_to_color/image_raw"
 
-echo "[rs_setup] waiting for RealSense parameter service..."
+POINT_TOPIC_1="/camera/camera/depth/color/points"
+POINT_TOPIC_2="/camera/camera/depth/points"
+POINT_TOPIC_3="/camera/camera/points"
 
-NODE_READY="false"
-
-for i in $(seq 1 120); do
-    if timeout "${LIST_TIMEOUT}" ros2 param list "$NODE" >/tmp/realsense_params.txt 2>/dev/null; then
-        NODE_READY="true"
-        echo "[rs_setup] RealSense parameter service is ready"
-        break
-    fi
-
-    echo "[rs_setup] waiting node... ${i}/120"
-    sleep 0.5
-done
-
-if [ "$NODE_READY" != "true" ]; then
-    echo "[rs_setup] ERROR: RealSense parameter service not ready"
-    exit 1
-fi
-
-set_param_retry() {
-    PARAM_NAME="$1"
-    PARAM_VALUE="$2"
-    REQUIRED="$3"
-
-    for j in $(seq 1 10); do
-        echo "[rs_setup] set ${PARAM_NAME}=${PARAM_VALUE} try ${j}/10"
-        if timeout "${SET_TIMEOUT}" ros2 param set "$NODE" "${PARAM_NAME}" "${PARAM_VALUE}"; then
-            return 0
-        fi
-
-        sleep 0.5
-    done
-
-    if [ "$REQUIRED" = "required" ]; then
-        echo "[rs_setup] ERROR: failed to set required parameter ${PARAM_NAME}"
-        return 1
-    fi
-
-    echo "[rs_setup] WARN: failed to set optional parameter ${PARAM_NAME}"
-    return 0
-}
-
-# Force power line frequency after the RealSense node exists.
-# This avoids passing unsupported launch arguments to rs_launch.py.
-set_param_retry "rgb_camera.power_line_frequency" 2 "optional"
-
-echo "[rs_setup] checking pointcloud parameter prefix..."
-
-PC_PREFIX=""
-
-for i in $(seq 1 60); do
-    if timeout "${LIST_TIMEOUT}" ros2 param list "$NODE" >/tmp/realsense_params.txt 2>/dev/null; then
-        if grep -q "pointcloud__neon_.enable" /tmp/realsense_params.txt; then
-            PC_PREFIX="pointcloud__neon_"
-            echo "[rs_setup] using Jetson NEON pointcloud prefix: ${PC_PREFIX}"
-            break
-        fi
-
-        if grep -q "pointcloud.enable" /tmp/realsense_params.txt; then
-            PC_PREFIX="pointcloud"
-            echo "[rs_setup] using standard pointcloud prefix: ${PC_PREFIX}"
-            break
-        fi
-    fi
-
-    echo "[rs_setup] waiting pointcloud params... ${i}/60"
-    sleep 0.5
-done
-
-if [ -n "$PC_PREFIX" ]; then
-    set_param_retry "${PC_PREFIX}.stream_filter" 2 "required" || true
-    set_param_retry "${PC_PREFIX}.stream_index_filter" 0 "required" || true
-    set_param_retry "${PC_PREFIX}.enable" true "required" || true
-
-    echo "[rs_setup] pointcloud verification with timeout"
-    timeout "${GET_TIMEOUT}" ros2 param get "$NODE" "${PC_PREFIX}.stream_filter" || true
-    timeout "${GET_TIMEOUT}" ros2 param get "$NODE" "${PC_PREFIX}.stream_index_filter" || true
-    timeout "${GET_TIMEOUT}" ros2 param get "$NODE" "${PC_PREFIX}.enable" || true
-else
-    echo "[rs_setup] WARN: pointcloud parameters were not found; continuing with image/depth pipeline"
-fi
-
-echo "[rs_setup] waiting for color/depth topics..."
+echo "[topic_gate] waiting for color/depth/pointcloud topics..."
 
 COLOR_READY="false"
 DEPTH_READY="false"
+POINT_READY="false"
+POINT_TOPIC_FOUND=""
 
-for i in $(seq 1 90); do
+for i in $(seq 1 180); do
     TOPICS="$(ros2 topic list 2>/dev/null || true)"
 
     if echo "$TOPICS" | grep -Fxq "$COLOR_TOPIC"; then
@@ -193,37 +132,42 @@ for i in $(seq 1 90); do
         DEPTH_READY="true"
     fi
 
-    if [ "$COLOR_READY" = "true" ] && [ "$DEPTH_READY" = "true" ]; then
-        echo "[rs_setup] color/depth topics are ready"
-        break
+    if echo "$TOPICS" | grep -Fxq "$POINT_TOPIC_1"; then
+        POINT_READY="true"
+        POINT_TOPIC_FOUND="$POINT_TOPIC_1"
+    elif echo "$TOPICS" | grep -Fxq "$POINT_TOPIC_2"; then
+        POINT_READY="true"
+        POINT_TOPIC_FOUND="$POINT_TOPIC_2"
+    elif echo "$TOPICS" | grep -Fxq "$POINT_TOPIC_3"; then
+        POINT_READY="true"
+        POINT_TOPIC_FOUND="$POINT_TOPIC_3"
     fi
 
-    echo "[rs_setup] waiting topics... ${i}/90 color=${COLOR_READY} depth=${DEPTH_READY}"
+    if [ "$COLOR_READY" = "true" ] && [ "$DEPTH_READY" = "true" ] && [ "$POINT_READY" = "true" ]; then
+        echo "[topic_gate] color/depth/pointcloud topics are ready"
+        echo "[topic_gate] pointcloud topic: ${POINT_TOPIC_FOUND}"
+        exit 0
+    fi
+
+    echo "[topic_gate] waiting... ${i}/180 color=${COLOR_READY} depth=${DEPTH_READY} pointcloud=${POINT_READY}"
     sleep 0.5
 done
 
-if [ "$COLOR_READY" != "true" ]; then
-    echo "[rs_setup] ERROR: color topic was not observed: ${COLOR_TOPIC}"
-    exit 1
-fi
-
-if [ "$DEPTH_READY" != "true" ]; then
-    echo "[rs_setup] ERROR: aligned depth topic was not observed: ${DEPTH_TOPIC}"
-    exit 1
-fi
-
-echo "[rs_setup] RealSense runtime setup done"
-exit 0
+echo "[topic_gate] ERROR: required camera topics were not ready"
+echo "[topic_gate] expected color : ${COLOR_TOPIC}"
+echo "[topic_gate] expected depth  : ${DEPTH_TOPIC}"
+echo "[topic_gate] expected points : ${POINT_TOPIC_1} or ${POINT_TOPIC_2} or ${POINT_TOPIC_3}"
+echo "[topic_gate] current point-related topics:"
+ros2 topic list 2>/dev/null | grep -E "point|points|cloud" || true
+exit 1
 """
         ],
         output='screen'
     )
 
-    realsense_runtime_setup = TimerAction(
+    wait_camera_topics = TimerAction(
         period=8.0,
-        actions=[
-            realsense_runtime_setup_process
-        ]
+        actions=[wait_camera_topics_process]
     )
 
     # =========================================================
@@ -235,7 +179,7 @@ exit 0
     }
 
     # =========================================================
-    # Object distance node
+    # Perception nodes
     # =========================================================
     object_distance_node = Node(
         package='camera_perception_pkg',
@@ -245,14 +189,9 @@ exit 0
         emulate_tty=True,
         respawn=True,
         respawn_delay=3.0,
-        parameters=[
-            perception_config
-        ]
+        parameters=[perception_config],
     )
 
-    # =========================================================
-    # YOLOv8 detection node
-    # =========================================================
     yolov8_node = Node(
         package='camera_perception_pkg',
         executable='yolov8_node',
@@ -264,13 +203,6 @@ exit 0
         additional_env=yolo_env,
     )
 
-    # =========================================================
-    # YOLOv8 debug node
-    # =========================================================
-    # NOTE:
-    # - Debug node is kept alive for monitoring.
-    # - It starts after yolov8_node to reduce initial CUDA/CPU burst.
-    # - It also respawns if killed.
     yolov8_debug_node = Node(
         package='camera_perception_pkg',
         executable='yolov8_debug_node',
@@ -280,49 +212,30 @@ exit 0
         respawn=True,
         respawn_delay=5.0,
         additional_env=yolo_env,
+        condition=IfCondition(use_yolo_debug),
     )
 
     # =========================================================
-    # Start perception nodes only after RealSense runtime setup
+    # Start perception nodes after camera topics are ready
     # =========================================================
-    start_perception_after_realsense_setup = RegisterEventHandler(
+    start_perception_after_topic_gate = RegisterEventHandler(
         OnProcessExit(
-            target_action=realsense_runtime_setup_process,
+            target_action=wait_camera_topics_process,
             on_exit=[
-                TimerAction(
-                    period=1.0,
-                    actions=[
-                        object_distance_node
-                    ]
-                ),
-                TimerAction(
-                    period=4.0,
-                    actions=[
-                        yolov8_node
-                    ]
-                ),
-                TimerAction(
-                    period=9.0,
-                    actions=[
-                        yolov8_debug_node
-                    ]
-                ),
+                TimerAction(period=1.0, actions=[object_distance_node]),
+                TimerAction(period=4.0, actions=[yolov8_node]),
+                TimerAction(period=9.0, actions=[yolov8_debug_node]),
             ]
         )
     )
 
-    # =========================================================
-    # Launch order
-    # =========================================================
     return LaunchDescription([
-        TimerAction(
-            period=1.0,
-            actions=[
-                realsense_launch
-            ]
-        ),
+        declare_use_yolo_debug,
+        declare_initial_reset,
 
-        realsense_runtime_setup,
+        TimerAction(period=1.0, actions=[realsense_node]),
 
-        start_perception_after_realsense_setup,
+        wait_camera_topics,
+
+        start_perception_after_topic_gate,
     ])
