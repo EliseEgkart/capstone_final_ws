@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import copy
 import math
 import re
 import threading
@@ -75,6 +74,7 @@ class EbimuPublisher(Node):
 
         # 기존 층수 계산 노드 호환용 raw topic
         self.declare_parameter('legacy_topic_name', 'ebimu_data')
+
         # EKF용 IMU topic
         self.declare_parameter('imu_topic_name', '/imu/data')
 
@@ -97,10 +97,6 @@ class EbimuPublisher(Node):
         self.declare_parameter('orientation_cov_yaw', 0.15)
         self.declare_parameter('angular_velocity_covariance_diag', 0.02)
         self.declare_parameter('linear_acceleration_covariance_diag', 0.20)
-
-        # None / 파싱 실패 시 마지막 정상 IMU를 재발행할 최대 횟수
-        # 예: 100Hz면 20회 = 약 0.2초, 50Hz면 약 0.4초
-        self.declare_parameter('max_republish_count', 20)
 
         self.port = str(self.get_parameter('port').value)
         self.baudrate = int(self.get_parameter('baudrate').value)
@@ -127,25 +123,20 @@ class EbimuPublisher(Node):
             self.get_parameter('linear_acceleration_covariance_diag').value
         )
 
-        self.max_republish_count = int(self.get_parameter('max_republish_count').value)
-
         qos = QoSProfile(depth=50)
         self.raw_pub = self.create_publisher(String, self.legacy_topic_name, qos)
         self.imu_pub = self.create_publisher(Imu, self.imu_topic_name, qos)
 
         self.serial_handle: Optional[serial.Serial] = None
         self.running = True
+
+        # 경고 로그가 너무 많이 찍히지 않도록 시간 제한
         self.last_parse_warn_time = 0.0
+        self.last_empty_warn_time = 0.0
+        self.last_exception_warn_time = 0.0
 
-        # 마지막 정상 IMU 저장용
-        self.last_imu_msg: Optional[Imu] = None
-
-        # 연속 파싱 실패 / 재발행 횟수
+        # 깨진 프레임 개수 확인용
         self.bad_frame_count = 0
-        self.republish_count = 0
-        self.last_republish_warn_time = 0.0
-        self.last_no_valid_imu_warn_time = 0.0
-        self.last_republish_stop_warn_time = 0.0
 
         self.read_thread = threading.Thread(target=self.read_loop, daemon=True)
         self.read_thread.start()
@@ -194,8 +185,8 @@ class EbimuPublisher(Node):
     def token_to_float(self, token: str) -> Optional[float]:
         try:
             return float(token)
-        except ValueError:
-            match = FLOAT_RE.search(token)
+        except (ValueError, TypeError):
+            match = FLOAT_RE.search(str(token))
             if match is None:
                 return None
             try:
@@ -211,14 +202,19 @@ class EbimuPublisher(Node):
         for idx in indices:
             if idx < 0 or idx >= len(tokens):
                 return None
+
             value = self.token_to_float(tokens[idx])
             if value is None:
                 return None
+
             values.append(value)
 
         return values[0], values[1], values[2]
 
     def build_imu_msg(self, raw_line: str) -> Optional[Imu]:
+        if raw_line is None:
+            return None
+
         line = raw_line.strip()
         if not line:
             return None
@@ -295,70 +291,6 @@ class EbimuPublisher(Node):
 
         return msg
 
-    def publish_valid_imu(self, imu_msg: Imu) -> None:
-        """
-        정상적으로 파싱된 IMU를 publish하고 마지막 정상 IMU로 저장한다.
-        """
-        self.imu_pub.publish(imu_msg)
-
-        # 이후 None / 파싱 실패가 들어왔을 때 재사용하기 위해 깊은 복사로 저장
-        self.last_imu_msg = copy.deepcopy(imu_msg)
-
-        # 정상 프레임이 들어왔으므로 실패/재발행 카운터 초기화
-        self.bad_frame_count = 0
-        self.republish_count = 0
-
-    def republish_last_imu(self, reason: str) -> None:
-        """
-        None, empty line, parsing failure 등이 발생했을 때
-        마지막 정상 IMU 값을 현재 timestamp로 갱신해서 다시 publish한다.
-        단, 무한히 재발행하지 않도록 max_republish_count까지만 허용한다.
-        """
-        self.bad_frame_count += 1
-        now = time.time()
-
-        if self.last_imu_msg is None:
-            if now - self.last_no_valid_imu_warn_time > 5.0:
-                self.get_logger().warning(
-                    f'No valid IMU message has been received yet. '
-                    f'Cannot republish last IMU. reason={reason}'
-                )
-                self.last_no_valid_imu_warn_time = now
-            return
-
-        if self.republish_count >= self.max_republish_count:
-            if now - self.last_republish_stop_warn_time > 5.0:
-                self.get_logger().warning(
-                    f'IMU input has been invalid for too long. '
-                    f'Stop republishing last IMU. '
-                    f'bad_frame_count={self.bad_frame_count}, '
-                    f'republish_count={self.republish_count}, '
-                    f'max_republish_count={self.max_republish_count}, '
-                    f'reason={reason}'
-                )
-                self.last_republish_stop_warn_time = now
-            return
-
-        try:
-            msg = copy.deepcopy(self.last_imu_msg)
-
-            # EKF가 오래된 timestamp로 판단하지 않도록 현재 시간으로 갱신
-            msg.header.stamp = self.get_clock().now().to_msg()
-
-            self.imu_pub.publish(msg)
-            self.republish_count += 1
-
-            if now - self.last_republish_warn_time > 5.0:
-                self.get_logger().warning(
-                    f'Republishing last valid IMU because current EBIMU frame is invalid. '
-                    f'republish_count={self.republish_count}/'
-                    f'{self.max_republish_count}, reason={reason}'
-                )
-                self.last_republish_warn_time = now
-
-        except Exception as exc:
-            self.get_logger().warning(f'Failed to republish last valid IMU: {exc}')
-
     def publish_raw_line(self, raw_line: str) -> None:
         """
         기존 elevator_floor_node 호환을 위해 raw ebimu_data는 계속 publish한다.
@@ -366,6 +298,25 @@ class EbimuPublisher(Node):
         raw_msg = String()
         raw_msg.data = raw_line
         self.raw_pub.publish(raw_msg)
+
+    def skip_bad_imu_frame(self, reason: str) -> None:
+        """
+        None / empty read / decode 실패 / 파싱 실패 프레임은 /imu/data로 publish하지 않는다.
+
+        중요한 점:
+        - 마지막 정상 IMU를 재발행하지 않는다.
+        - EKF가 가짜 최신 IMU 값을 믿지 않도록 한다.
+        - 노드는 죽지 않고 다음 serial line을 계속 기다린다.
+        """
+        self.bad_frame_count += 1
+        now = time.time()
+
+        if now - self.last_parse_warn_time > 5.0:
+            self.get_logger().warning(
+                f'Invalid EBIMU frame skipped. '
+                f'bad_frame_count={self.bad_frame_count}, reason={reason}'
+            )
+            self.last_parse_warn_time = now
 
     def read_loop(self) -> None:
         while self.running:
@@ -379,43 +330,45 @@ class EbimuPublisher(Node):
 
                 if raw is None or len(raw) == 0:
                     # serial timeout 또는 순간적인 empty read
-                    # 기존 코드는 그냥 continue였지만, 여기서는 마지막 정상 IMU를 재발행
-                    self.republish_last_imu('empty serial read')
+                    # /imu/data는 publish하지 않고 다음 프레임을 기다린다.
+                    now = time.time()
+                    if now - self.last_empty_warn_time > 5.0:
+                        self.skip_bad_imu_frame('empty serial read')
+                        self.last_empty_warn_time = now
                     time.sleep(0.005)
                     continue
 
-                raw_line = raw.decode('utf-8', errors='ignore')
+                try:
+                    raw_line = raw.decode('utf-8', errors='ignore')
+                except Exception as exc:
+                    self.skip_bad_imu_frame(f'decode failed: {exc}')
+                    continue
 
-                if raw_line is None or raw_line == '':
-                    self.republish_last_imu('empty decoded line')
+                if raw_line is None or raw_line.strip() == '':
+                    self.skip_bad_imu_frame('empty decoded line')
                     continue
 
                 # 기존 층수 계산 노드 호환용 raw topic은 계속 publish
-                self.publish_raw_line(raw_line)
+                try:
+                    self.publish_raw_line(raw_line)
+                except Exception as exc:
+                    # raw topic publish 실패가 IMU node 전체를 죽이면 안 됨
+                    self.get_logger().warning(f'Failed to publish raw EBIMU line: {exc}')
 
                 imu_msg = self.build_imu_msg(raw_line)
 
                 if imu_msg is not None:
-                    self.publish_valid_imu(imu_msg)
-                else:
-                    # roll/pitch/yaw 파싱 실패 시 마지막 정상 IMU 재발행
-                    self.republish_last_imu('failed to parse roll/pitch/yaw from EBIMU line')
+                    self.imu_pub.publish(imu_msg)
 
-                    now = time.time()
-                    if now - self.last_parse_warn_time > 5.0:
-                        self.get_logger().warning(
-                            'Could not parse roll/pitch/yaw for /imu/data from the current EBIMU line. '
-                            'Republishing the last valid IMU message if available. '
-                            'Raw ebimu_data is still being published. '
-                            'If your EBIMU output format is not *roll,pitch,yaw, change rpy_field_indices.'
-                        )
-                        self.last_parse_warn_time = now
+                    # 정상 IMU가 들어왔으므로 bad frame count 초기화
+                    self.bad_frame_count = 0
+                else:
+                    # 핵심 수정:
+                    # 마지막 정상 IMU를 재발행하지 않고, 깨진 프레임만 버린다.
+                    self.skip_bad_imu_frame('failed to parse roll/pitch/yaw from EBIMU line')
 
             except SerialException as exc:
                 self.get_logger().error(f'EBIMU serial read error: {exc}')
-
-                # serial exception 순간에도 마지막 정상 IMU를 짧게 재발행
-                self.republish_last_imu(f'serial exception: {exc}')
 
                 try:
                     if self.serial_handle is not None:
@@ -427,9 +380,13 @@ class EbimuPublisher(Node):
                 time.sleep(1.0)
 
             except Exception as exc:
-                # 예상치 못한 예외가 발생해도 노드를 죽이지 않고 마지막 정상 IMU를 재발행
-                self.get_logger().warning(f'Unexpected EBIMU handling error: {exc}')
-                self.republish_last_imu(f'unexpected exception: {exc}')
+                # 예상치 못한 예외가 발생해도 노드를 죽이지 않고 다음 프레임을 계속 기다림
+                now = time.time()
+                if now - self.last_exception_warn_time > 5.0:
+                    self.get_logger().warning(f'Unexpected EBIMU handling error skipped: {exc}')
+                    self.last_exception_warn_time = now
+
+                self.skip_bad_imu_frame(f'unexpected exception: {exc}')
                 time.sleep(0.01)
 
     def destroy_node(self):
