@@ -23,11 +23,11 @@ def generate_launch_description():
     # Launch arguments
     # =========================================================
     use_yolo_debug = LaunchConfiguration('use_yolo_debug')
-    # 나중에 False 해야함
+
     declare_use_yolo_debug = DeclareLaunchArgument(
         'use_yolo_debug',
         default_value='true',
-        description='Start yolov8_debug_node. Keep false on Jetson for stable YOLO/CUDA memory.'
+        description='If true, start yolov8_debug_node. Set false to reduce Jetson GPU/CPU load.'
     )
 
     # =========================================================
@@ -58,12 +58,11 @@ def generate_launch_description():
     # RealSense D435 launch
     # =========================================================
     # NOTE:
-    # - Jetson/ARM 환경에서는 pointcloud 파라미터가
-    #   pointcloud__neon_.enable 형태로 생성될 수 있음.
-    # - pointcloud를 launch argument에서 바로 켜면 stream filter 설정 전에
-    #   먼저 활성화될 수 있으므로, 여기서는 끄고 아래 설정 블록에서
-    #   stream_filter -> stream_index_filter -> enable 순서로 켠다.
-    # - rgb_camera.power_line_frequency는 허용 범위가 0~2이므로 2로 고정한다.
+    # - Do not pass rgb_camera.power_line_frequency here.
+    #   Some realsense2_camera rs_launch.py versions do not declare it as a
+    #   launch argument and will print "Parameter is not supported".
+    # - The value is forced at runtime by the setup process below.
+    # - Do not pass use_yolo_debug to RealSense.
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(realsense_launch_path),
         launch_arguments={
@@ -75,13 +74,10 @@ def generate_launch_description():
             'align_depth.enable': 'true',
             'enable_sync': 'true',
 
-            # Jetson pointcloud는 아래 bash 블록에서 안정적으로 켠다.
+            # Jetson pointcloud is enabled later after stream_filter/index setup.
             'pointcloud.enable': 'false',
 
-            # Korean 60 Hz environment. Do not use 3; RealSense allows only 0~2.
-            'rgb_camera.power_line_frequency': '2',
-
-            # Stability options for intermittent USB/device initialization.
+            # USB/device recovery options.
             'initial_reset': 'true',
             'wait_for_device_timeout': '-1.0',
             'reconnect_timeout': '6.0',
@@ -89,15 +85,15 @@ def generate_launch_description():
     )
 
     # =========================================================
-    # Jetson NEON pointcloud runtime parameter setting
+    # RealSense runtime setup
     # =========================================================
-    # NOTE:
-    # - 기존처럼 ros2 param set 3개를 동시에 따로 실행하지 않는다.
-    # - /camera/camera 노드와 pointcloud 파라미터가 실제로 생길 때까지 기다린다.
-    # - Jetson NEON(pointcloud__neon_)을 우선 사용하고, 없으면 일반 pointcloud로 fallback한다.
-    # - stream_filter, stream_index_filter를 먼저 설정한 뒤 enable을 마지막에 true로 바꾼다.
-    # - 검증 단계에서 ros2 param get이 멈추지 않도록 timeout을 건다.
-    set_neon_pointcloud_process = ExecuteProcess(
+    # This process waits until /camera/camera is alive, then:
+    #   1. forces rgb_camera.power_line_frequency to 2
+    #   2. enables Jetson NEON pointcloud safely
+    #   3. waits until color and aligned depth topics exist
+    # After this process exits, object_distance_node, yolov8_node,
+    # and optionally yolov8_debug_node are started in a staggered order.
+    realsense_runtime_setup_process = ExecuteProcess(
         cmd=[
             'bash',
             '-lc',
@@ -105,49 +101,40 @@ def generate_launch_description():
 set -u
 
 NODE="/camera/camera"
-PC_PREFIX=""
 LIST_TIMEOUT="2s"
 SET_TIMEOUT="3s"
 GET_TIMEOUT="2s"
 
-echo "[pcfg] waiting for RealSense node and pointcloud parameters..."
+COLOR_TOPIC="/camera/camera/color/image_raw"
+DEPTH_TOPIC="/camera/camera/aligned_depth_to_color/image_raw"
 
-FOUND="false"
+echo "[rs_setup] waiting for RealSense parameter service..."
 
-for i in $(seq 1 90); do
+NODE_READY="false"
+
+for i in $(seq 1 120); do
     if timeout "${LIST_TIMEOUT}" ros2 param list "$NODE" >/tmp/realsense_params.txt 2>/dev/null; then
-        if grep -q "pointcloud__neon_.enable" /tmp/realsense_params.txt; then
-            PC_PREFIX="pointcloud__neon_"
-            FOUND="true"
-            echo "[pcfg] found Jetson NEON pointcloud parameters: ${PC_PREFIX}"
-            break
-        fi
-
-        if grep -q "pointcloud.enable" /tmp/realsense_params.txt; then
-            PC_PREFIX="pointcloud"
-            FOUND="true"
-            echo "[pcfg] found standard pointcloud parameters: ${PC_PREFIX}"
-            break
-        fi
+        NODE_READY="true"
+        echo "[rs_setup] RealSense parameter service is ready"
+        break
     fi
 
-    echo "[pcfg] waiting... ${i}/90"
+    echo "[rs_setup] waiting node... ${i}/120"
     sleep 0.5
 done
 
-if [ "$FOUND" != "true" ]; then
-    echo "[pcfg] ERROR: pointcloud parameter was not found"
-    echo "[pcfg] available pointcloud parameters:"
-    timeout "${LIST_TIMEOUT}" ros2 param list "$NODE" 2>/dev/null | grep pointcloud || true
+if [ "$NODE_READY" != "true" ]; then
+    echo "[rs_setup] ERROR: RealSense parameter service not ready"
     exit 1
 fi
 
 set_param_retry() {
     PARAM_NAME="$1"
     PARAM_VALUE="$2"
+    REQUIRED="$3"
 
-    for j in $(seq 1 5); do
-        echo "[pcfg] set ${PARAM_NAME}=${PARAM_VALUE} try ${j}/5"
+    for j in $(seq 1 10); do
+        echo "[rs_setup] set ${PARAM_NAME}=${PARAM_VALUE} try ${j}/10"
         if timeout "${SET_TIMEOUT}" ros2 param set "$NODE" "${PARAM_NAME}" "${PARAM_VALUE}"; then
             return 0
         fi
@@ -155,71 +142,115 @@ set_param_retry() {
         sleep 0.5
     done
 
-    echo "[pcfg] ERROR: failed to set ${PARAM_NAME}"
-    return 1
+    if [ "$REQUIRED" = "required" ]; then
+        echo "[rs_setup] ERROR: failed to set required parameter ${PARAM_NAME}"
+        return 1
+    fi
+
+    echo "[rs_setup] WARN: failed to set optional parameter ${PARAM_NAME}"
+    return 0
 }
 
-echo "[pcfg] setting pointcloud stream parameters first"
-set_param_retry "${PC_PREFIX}.stream_filter" 2 || exit 1
-set_param_retry "${PC_PREFIX}.stream_index_filter" 0 || exit 1
+# Force power line frequency after the RealSense node exists.
+# This avoids passing unsupported launch arguments to rs_launch.py.
+set_param_retry "rgb_camera.power_line_frequency" 2 "optional"
 
-echo "[pcfg] enabling pointcloud"
-set_param_retry "${PC_PREFIX}.enable" true || exit 1
+echo "[rs_setup] checking pointcloud parameter prefix..."
 
-echo "[pcfg] verification with timeout"
-timeout "${GET_TIMEOUT}" ros2 param get "$NODE" "${PC_PREFIX}.stream_filter" || true
-timeout "${GET_TIMEOUT}" ros2 param get "$NODE" "${PC_PREFIX}.stream_index_filter" || true
-timeout "${GET_TIMEOUT}" ros2 param get "$NODE" "${PC_PREFIX}.enable" || true
+PC_PREFIX=""
 
-echo "[pcfg] pointcloud configuration done"
+for i in $(seq 1 60); do
+    if timeout "${LIST_TIMEOUT}" ros2 param list "$NODE" >/tmp/realsense_params.txt 2>/dev/null; then
+        if grep -q "pointcloud__neon_.enable" /tmp/realsense_params.txt; then
+            PC_PREFIX="pointcloud__neon_"
+            echo "[rs_setup] using Jetson NEON pointcloud prefix: ${PC_PREFIX}"
+            break
+        fi
+
+        if grep -q "pointcloud.enable" /tmp/realsense_params.txt; then
+            PC_PREFIX="pointcloud"
+            echo "[rs_setup] using standard pointcloud prefix: ${PC_PREFIX}"
+            break
+        fi
+    fi
+
+    echo "[rs_setup] waiting pointcloud params... ${i}/60"
+    sleep 0.5
+done
+
+if [ -n "$PC_PREFIX" ]; then
+    set_param_retry "${PC_PREFIX}.stream_filter" 2 "required" || true
+    set_param_retry "${PC_PREFIX}.stream_index_filter" 0 "required" || true
+    set_param_retry "${PC_PREFIX}.enable" true "required" || true
+
+    echo "[rs_setup] pointcloud verification with timeout"
+    timeout "${GET_TIMEOUT}" ros2 param get "$NODE" "${PC_PREFIX}.stream_filter" || true
+    timeout "${GET_TIMEOUT}" ros2 param get "$NODE" "${PC_PREFIX}.stream_index_filter" || true
+    timeout "${GET_TIMEOUT}" ros2 param get "$NODE" "${PC_PREFIX}.enable" || true
+else
+    echo "[rs_setup] WARN: pointcloud parameters were not found; continuing with image/depth pipeline"
+fi
+
+echo "[rs_setup] waiting for color/depth topics..."
+
+COLOR_READY="false"
+DEPTH_READY="false"
+
+for i in $(seq 1 90); do
+    TOPICS="$(ros2 topic list 2>/dev/null || true)"
+
+    if echo "$TOPICS" | grep -Fxq "$COLOR_TOPIC"; then
+        COLOR_READY="true"
+    fi
+
+    if echo "$TOPICS" | grep -Fxq "$DEPTH_TOPIC"; then
+        DEPTH_READY="true"
+    fi
+
+    if [ "$COLOR_READY" = "true" ] && [ "$DEPTH_READY" = "true" ]; then
+        echo "[rs_setup] color/depth topics are ready"
+        break
+    fi
+
+    echo "[rs_setup] waiting topics... ${i}/90 color=${COLOR_READY} depth=${DEPTH_READY}"
+    sleep 0.5
+done
+
+if [ "$COLOR_READY" != "true" ]; then
+    echo "[rs_setup] ERROR: color topic was not observed: ${COLOR_TOPIC}"
+    exit 1
+fi
+
+if [ "$DEPTH_READY" != "true" ]; then
+    echo "[rs_setup] ERROR: aligned depth topic was not observed: ${DEPTH_TOPIC}"
+    exit 1
+fi
+
+echo "[rs_setup] RealSense runtime setup done"
 exit 0
 """
         ],
         output='screen'
     )
 
-    set_neon_pointcloud_params = TimerAction(
-        period=6.0,
+    realsense_runtime_setup = TimerAction(
+        period=8.0,
         actions=[
-            set_neon_pointcloud_process
+            realsense_runtime_setup_process
         ]
     )
 
     # =========================================================
-    # Common YOLO/PyTorch environment for Jetson stability
+    # YOLO/PyTorch environment for Jetson stability
     # =========================================================
-    # - CUDA_MODULE_LOADING=LAZY reduces first-load memory pressure.
-    # - PYTORCH_CUDA_ALLOC_CONF helps reduce CUDA memory fragmentation.
     yolo_env = {
         'CUDA_MODULE_LOADING': 'LAZY',
         'PYTORCH_CUDA_ALLOC_CONF': 'max_split_size_mb:64,garbage_collection_threshold:0.8',
     }
 
     # =========================================================
-    # YOLOv8 detection node
-    # =========================================================
-    # NOTE:
-    # - respawn=True makes the node come back if CUDA/cuDNN allocation fails once.
-    # - Keep yolov8_debug_node disabled by default to reduce Jetson GPU memory pressure.
-    yolov8_node = Node(
-        package='camera_perception_pkg',
-        executable='yolov8_node',
-        name='yolov8_node',
-        output='screen',
-        emulate_tty=True,
-        respawn=True,
-        respawn_delay=5.0,
-        additional_env=yolo_env,
-    )
-
-    # =========================================================
     # Object distance node
     # =========================================================
-    # Initial target button is loaded from:
-    # config/manipulator_perception.yaml
-    #
-    # Runtime target change is handled by:
-    # /manipulator_perception/target_button
     object_distance_node = Node(
         package='camera_perception_pkg',
         executable='object_distance_node',
@@ -234,13 +265,26 @@ exit 0
     )
 
     # =========================================================
+    # YOLOv8 detection node
+    # =========================================================
+    yolov8_node = Node(
+        package='camera_perception_pkg',
+        executable='yolov8_node',
+        name='yolov8_node',
+        output='screen',
+        emulate_tty=True,
+        respawn=True,
+        respawn_delay=5.0,
+        additional_env=yolo_env,
+    )
+
+    # =========================================================
     # YOLOv8 debug node
     # =========================================================
     # NOTE:
-    # - Disabled by default because Jetson can fail YOLO warmup with CUDA/cuDNN
-    #   allocation errors when debug visualization and RViz are also running.
-    # - Enable only when needed:
-    #   ros2 launch camera_perception_pkg manipulator_perception.launch.py use_yolo_debug:=true
+    # - Can be turned on/off by use_yolo_debug.
+    # - Default is true because this system currently needs debug visibility.
+    # - If Jetson CUDA memory becomes unstable, run with use_yolo_debug:=false.
     yolov8_debug_node = Node(
         package='camera_perception_pkg',
         executable='yolov8_debug_node',
@@ -254,16 +298,11 @@ exit 0
     )
 
     # =========================================================
-    # Start perception nodes after pointcloud parameter setup
+    # Start perception nodes only after RealSense runtime setup
     # =========================================================
-    # NOTE:
-    # - TimerAction만으로는 순서를 완전히 보장하기 어렵다.
-    # - 따라서 pointcloud 설정 프로세스가 끝난 뒤 인식 노드를 실행한다.
-    # - object_distance_node를 먼저 띄워 depth subscription을 준비하고,
-    #   YOLO는 2초 뒤 시작해 Jetson 초기 부하를 줄인다.
-    start_perception_after_pointcloud_setup = RegisterEventHandler(
+    start_perception_after_realsense_setup = RegisterEventHandler(
         OnProcessExit(
-            target_action=set_neon_pointcloud_process,
+            target_action=realsense_runtime_setup_process,
             on_exit=[
                 TimerAction(
                     period=1.0,
@@ -272,13 +311,13 @@ exit 0
                     ]
                 ),
                 TimerAction(
-                    period=3.0,
+                    period=4.0,
                     actions=[
                         yolov8_node
                     ]
                 ),
                 TimerAction(
-                    period=8.0,
+                    period=9.0,
                     actions=[
                         yolov8_debug_node
                     ]
@@ -293,7 +332,6 @@ exit 0
     return LaunchDescription([
         declare_use_yolo_debug,
 
-        # 1. RealSense 먼저 실행
         TimerAction(
             period=1.0,
             actions=[
@@ -301,9 +339,7 @@ exit 0
             ]
         ),
 
-        # 2. RealSense 노드와 pointcloud 파라미터가 준비될 때까지 대기 후 설정
-        set_neon_pointcloud_params,
+        realsense_runtime_setup,
 
-        # 3. pointcloud 설정 프로세스가 종료된 뒤 인식 노드 실행
-        start_perception_after_pointcloud_setup,
+        start_perception_after_realsense_setup,
     ])
