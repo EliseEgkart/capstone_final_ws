@@ -88,6 +88,7 @@ def generate_launch_description():
                 # ---------------------------------------------------------
                 'depth_module.depth_profile': '640x480x15',
                 'rgb_camera.color_profile': '640x480x15',
+                'rgb_camera.power_line_frequency': 2,
 
                 # D435 may still open infra streams internally through the
                 # depth module. Keep them lighter than the default 848x480x30.
