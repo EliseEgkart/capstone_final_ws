@@ -50,11 +50,14 @@ def generate_launch_description():
     # RealSense D435 node - Jetson NEON direct mode
     # =========================================================
     # IMPORTANT:
-    # - Do not use rs_launch.py for pointcloud on Jetson NEON path.
-    # - Some Jetson builds expose pointcloud parameters as pointcloud__neon_.*
-    # - Directly launching realsense2_camera_node with --ros-args style
-    #   parameters is the most reliable way to apply pointcloud__neon_ params
-    #   before the node starts.
+    # - Use direct realsense2_camera_node instead of rs_launch.py so Jetson
+    #   pointcloud__neon_ parameters are injected before the node starts.
+    # - Keep color stream enabled for YOLO.
+    # - Use untextured/depth-only pointcloud by stream_filter=0.
+    #   This avoids "No stream match for pointcloud chosen texture Process - Color"
+    #   when color frames are dropped or not synchronized with pointcloud.
+    # - Explicitly set camera_name/camera_namespace to preserve /camera/camera/*
+    #   topic layout used by the existing perception YAML.
     # - publish_tf=false protects the manipulator TF tree because camera frames
     #   are already provided by URDF / robot_state_publisher.
     realsense_node = Node(
@@ -66,6 +69,13 @@ def generate_launch_description():
         emulate_tty=True,
         parameters=[
             {
+                # Preserve expected topic layout:
+                # /camera/camera/color/image_raw
+                # /camera/camera/aligned_depth_to_color/image_raw
+                # /camera/camera/depth/points or /camera/camera/depth/color/points
+                'camera_name': 'camera',
+                'camera_namespace': 'camera',
+
                 # Stream profiles
                 'depth_module.depth_profile': '640x480x15',
                 'rgb_camera.color_profile': '640x480x15',
@@ -76,9 +86,11 @@ def generate_launch_description():
                 'align_depth.enable': True,
                 'enable_sync': True,
 
-                # Jetson / ARM NEON pointcloud parameters
+                # Jetson / ARM NEON pointcloud parameters.
+                # stream_filter=0: untextured/depth-only pointcloud.
+                # Keep color stream separately for YOLO.
                 'pointcloud__neon_.enable': True,
-                'pointcloud__neon_.stream_filter': 2,
+                'pointcloud__neon_.stream_filter': 0,
                 'pointcloud__neon_.stream_index_filter': 0,
                 'pointcloud__neon_.allow_no_texture_points': True,
                 'pointcloud__neon_.ordered_pc': False,
@@ -98,8 +110,8 @@ def generate_launch_description():
     # =========================================================
     # Topic gate
     # =========================================================
-    # This checks actual camera output topics only.
-    # It does NOT query /camera/camera parameter services.
+    # Do not query /camera/camera parameter services.
+    # Wait only for actual ROS topics.
     wait_camera_topics_process = ExecuteProcess(
         cmd=[
             'bash',
@@ -107,45 +119,71 @@ def generate_launch_description():
             """
 set -u
 
-COLOR_TOPIC="/camera/camera/color/image_raw"
-DEPTH_TOPIC="/camera/camera/aligned_depth_to_color/image_raw"
-
+# Expected topic layout
+COLOR_TOPIC_1="/camera/camera/color/image_raw"
+DEPTH_TOPIC_1="/camera/camera/aligned_depth_to_color/image_raw"
 POINT_TOPIC_1="/camera/camera/depth/color/points"
 POINT_TOPIC_2="/camera/camera/depth/points"
 POINT_TOPIC_3="/camera/camera/points"
+
+# Fallback topic layout, in case direct node publishes without duplicated camera name.
+COLOR_TOPIC_2="/camera/color/image_raw"
+DEPTH_TOPIC_2="/camera/aligned_depth_to_color/image_raw"
+POINT_TOPIC_4="/camera/depth/color/points"
+POINT_TOPIC_5="/camera/depth/points"
+POINT_TOPIC_6="/camera/points"
 
 echo "[topic_gate] waiting for color/depth/pointcloud topics..."
 
 COLOR_READY="false"
 DEPTH_READY="false"
 POINT_READY="false"
-POINT_TOPIC_FOUND=""
+
+COLOR_FOUND=""
+DEPTH_FOUND=""
+POINT_FOUND=""
 
 for i in $(seq 1 180); do
     TOPICS="$(ros2 topic list 2>/dev/null || true)"
 
-    if echo "$TOPICS" | grep -Fxq "$COLOR_TOPIC"; then
+    if echo "$TOPICS" | grep -Fxq "$COLOR_TOPIC_1"; then
         COLOR_READY="true"
+        COLOR_FOUND="$COLOR_TOPIC_1"
+    elif echo "$TOPICS" | grep -Fxq "$COLOR_TOPIC_2"; then
+        COLOR_READY="true"
+        COLOR_FOUND="$COLOR_TOPIC_2"
     fi
 
-    if echo "$TOPICS" | grep -Fxq "$DEPTH_TOPIC"; then
+    if echo "$TOPICS" | grep -Fxq "$DEPTH_TOPIC_1"; then
         DEPTH_READY="true"
+        DEPTH_FOUND="$DEPTH_TOPIC_1"
+    elif echo "$TOPICS" | grep -Fxq "$DEPTH_TOPIC_2"; then
+        DEPTH_READY="true"
+        DEPTH_FOUND="$DEPTH_TOPIC_2"
     fi
 
-    if echo "$TOPICS" | grep -Fxq "$POINT_TOPIC_1"; then
-        POINT_READY="true"
-        POINT_TOPIC_FOUND="$POINT_TOPIC_1"
-    elif echo "$TOPICS" | grep -Fxq "$POINT_TOPIC_2"; then
-        POINT_READY="true"
-        POINT_TOPIC_FOUND="$POINT_TOPIC_2"
-    elif echo "$TOPICS" | grep -Fxq "$POINT_TOPIC_3"; then
-        POINT_READY="true"
-        POINT_TOPIC_FOUND="$POINT_TOPIC_3"
-    fi
+    for PT in "$POINT_TOPIC_1" "$POINT_TOPIC_2" "$POINT_TOPIC_3" "$POINT_TOPIC_4" "$POINT_TOPIC_5" "$POINT_TOPIC_6"; do
+        if echo "$TOPICS" | grep -Fxq "$PT"; then
+            POINT_READY="true"
+            POINT_FOUND="$PT"
+            break
+        fi
+    done
 
     if [ "$COLOR_READY" = "true" ] && [ "$DEPTH_READY" = "true" ] && [ "$POINT_READY" = "true" ]; then
         echo "[topic_gate] color/depth/pointcloud topics are ready"
-        echo "[topic_gate] pointcloud topic: ${POINT_TOPIC_FOUND}"
+        echo "[topic_gate] color topic     : ${COLOR_FOUND}"
+        echo "[topic_gate] aligned depth   : ${DEPTH_FOUND}"
+        echo "[topic_gate] pointcloud topic: ${POINT_FOUND}"
+
+        if [ "$COLOR_FOUND" != "$COLOR_TOPIC_1" ]; then
+            echo "[topic_gate] WARN: color topic is not in expected /camera/camera layout"
+        fi
+
+        if [ "$DEPTH_FOUND" != "$DEPTH_TOPIC_1" ]; then
+            echo "[topic_gate] WARN: depth topic is not in expected /camera/camera layout"
+        fi
+
         exit 0
     fi
 
@@ -154,11 +192,8 @@ for i in $(seq 1 180); do
 done
 
 echo "[topic_gate] ERROR: required camera topics were not ready"
-echo "[topic_gate] expected color : ${COLOR_TOPIC}"
-echo "[topic_gate] expected depth  : ${DEPTH_TOPIC}"
-echo "[topic_gate] expected points : ${POINT_TOPIC_1} or ${POINT_TOPIC_2} or ${POINT_TOPIC_3}"
-echo "[topic_gate] current point-related topics:"
-ros2 topic list 2>/dev/null | grep -E "point|points|cloud" || true
+echo "[topic_gate] current camera topics:"
+ros2 topic list 2>/dev/null | grep -E "camera|point|points|cloud|depth|color" || true
 exit 1
 """
         ],
