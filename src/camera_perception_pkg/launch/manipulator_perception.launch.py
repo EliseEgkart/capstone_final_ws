@@ -4,32 +4,18 @@ from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import (
-    DeclareLaunchArgument,
     IncludeLaunchDescription,
     TimerAction,
     ExecuteProcess,
     RegisterEventHandler,
 )
-from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
 
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    # =========================================================
-    # Launch arguments
-    # =========================================================
-    use_yolo_debug = LaunchConfiguration('use_yolo_debug')
-
-    declare_use_yolo_debug = DeclareLaunchArgument(
-        'use_yolo_debug',
-        default_value='true',
-        description='If true, start yolov8_debug_node. Set false to reduce Jetson GPU/CPU load.'
-    )
-
     # =========================================================
     # Package paths
     # =========================================================
@@ -62,7 +48,7 @@ def generate_launch_description():
     #   Some realsense2_camera rs_launch.py versions do not declare it as a
     #   launch argument and will print "Parameter is not supported".
     # - The value is forced at runtime by the setup process below.
-    # - Do not pass use_yolo_debug to RealSense.
+    # - Do not pass any debug-only launch argument here.
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(realsense_launch_path),
         launch_arguments={
@@ -92,7 +78,7 @@ def generate_launch_description():
     #   2. enables Jetson NEON pointcloud safely
     #   3. waits until color and aligned depth topics exist
     # After this process exits, object_distance_node, yolov8_node,
-    # and optionally yolov8_debug_node are started in a staggered order.
+    # and yolov8_debug_node are started in a staggered order.
     realsense_runtime_setup_process = ExecuteProcess(
         cmd=[
             'bash',
@@ -282,9 +268,9 @@ exit 0
     # YOLOv8 debug node
     # =========================================================
     # NOTE:
-    # - Can be turned on/off by use_yolo_debug.
-    # - Default is true because this system currently needs debug visibility.
-    # - If Jetson CUDA memory becomes unstable, run with use_yolo_debug:=false.
+    # - Debug node is kept alive for monitoring.
+    # - It starts after yolov8_node to reduce initial CUDA/CPU burst.
+    # - It also respawns if killed.
     yolov8_debug_node = Node(
         package='camera_perception_pkg',
         executable='yolov8_debug_node',
@@ -294,7 +280,6 @@ exit 0
         respawn=True,
         respawn_delay=5.0,
         additional_env=yolo_env,
-        condition=IfCondition(use_yolo_debug),
     )
 
     # =========================================================
@@ -330,8 +315,6 @@ exit 0
     # Launch order
     # =========================================================
     return LaunchDescription([
-        declare_use_yolo_debug,
-
         TimerAction(
             period=1.0,
             actions=[
