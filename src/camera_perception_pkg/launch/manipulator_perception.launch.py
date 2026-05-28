@@ -16,6 +16,7 @@ def generate_launch_description():
     # =========================================================
     use_yolo_debug = LaunchConfiguration('use_yolo_debug')
     initial_reset = LaunchConfiguration('initial_reset')
+    enable_realsense_sync = LaunchConfiguration('enable_realsense_sync')
 
     declare_use_yolo_debug = DeclareLaunchArgument(
         'use_yolo_debug',
@@ -27,6 +28,12 @@ def generate_launch_description():
         'initial_reset',
         default_value='true',
         description='If true, reset RealSense once during startup for USB recovery.'
+    )
+
+    declare_enable_realsense_sync = DeclareLaunchArgument(
+        'enable_realsense_sync',
+        default_value='false',
+        description='If true, enable RealSense frame sync. False is usually more stable on Jetson.'
     )
 
     # =========================================================
@@ -47,28 +54,18 @@ def generate_launch_description():
     # RealSense D435 node - Jetson NEON direct mode
     # =========================================================
     # IMPORTANT:
-    # 1. Do NOT use rs_setup or ros2 param list/set.
-    #    Parameter-service waiting caused a severe startup bottleneck.
+    # - This launch does not use rs_launch.py.
+    # - This launch does not use runtime "ros2 param list/set".
+    # - Jetson/ARM NEON pointcloud parameters are injected directly at node startup.
     #
-    # 2. Do NOT use rs_launch.py for Jetson NEON pointcloud configuration.
-    #    Some Jetson/ARM builds expose pointcloud parameters as:
-    #      pointcloud__neon_.enable
-    #      pointcloud__neon_.stream_filter
-    #      pointcloud__neon_.stream_index_filter
+    # Required core settings:
+    #   depth_module.depth_profile = 640x480x15
+    #   align_depth.enable = True
+    #   pointcloud__neon_.enable = True
     #
-    # 3. Use realsense2_camera_node directly and inject pointcloud__neon_
-    #    parameters at node startup.
-    #
-    # 4. publish_tf must be true here.
-    #    The URDF provides TF up to camera_link, while RealSense provides
-    #    camera optical frames such as camera_depth_optical_frame and
-    #    camera_color_optical_frame. If publish_tf is false, RViz can drop
-    #    depth/pointcloud messages because optical frame TF is missing.
-    #
-    # 5. stream_filter=0 creates untextured/depth-only pointcloud.
-    #    This avoids:
-    #      "No stream match for pointcloud chosen texture Process - Color"
-    #    while keeping color stream alive for YOLO.
+    # Note:
+    # - If rs_launch.py is used, the argument name is pointcloud.enable.
+    # - In this direct-node Jetson mode, use pointcloud__neon_.enable.
     realsense_node = Node(
         package='realsense2_camera',
         executable='realsense2_camera_node',
@@ -79,7 +76,7 @@ def generate_launch_description():
         parameters=[
             {
                 # ---------------------------------------------------------
-                # Keep the existing topic layout:
+                # Preserve existing topic layout:
                 #   /camera/camera/color/image_raw
                 #   /camera/camera/aligned_depth_to_color/image_raw
                 # ---------------------------------------------------------
@@ -92,40 +89,46 @@ def generate_launch_description():
                 'depth_module.depth_profile': '640x480x15',
                 'rgb_camera.color_profile': '640x480x15',
 
+                # D435 may still open infra streams internally through the
+                # depth module. Keep them lighter than the default 848x480x30.
+                'depth_module.infra_profile': '640x480x15',
+
                 # ---------------------------------------------------------
                 # Required streams
                 # ---------------------------------------------------------
                 'enable_depth': True,
                 'enable_color': True,
                 'align_depth.enable': True,
-                'enable_sync': True,
+
+                # Explicitly request no published infra image topics.
+                'enable_infra': False,
+                'enable_infra1': False,
+                'enable_infra2': False,
+
+                # On Jetson, sync can increase frame timeout pressure.
+                'enable_sync': ParameterValue(enable_realsense_sync, value_type=bool),
 
                 # ---------------------------------------------------------
                 # Jetson / ARM NEON pointcloud parameters
                 # ---------------------------------------------------------
                 'pointcloud__neon_.enable': True,
 
-                # 0 = untextured/depth-only pointcloud.
-                # 2 = color texture, but this caused "No stream match..."
-                #     on the current Jetson setup.
-                'pointcloud__neon_.stream_filter': 0,
+                # 1 = depth stream as pointcloud source.
+                # 2 = color texture, unstable on current Jetson setup.
+                # 0 = any, caused "Process - Any" warning.
+                'pointcloud__neon_.stream_filter': 1,
                 'pointcloud__neon_.stream_index_filter': 0,
 
-                # Allow pointcloud generation even without texture.
+                # Keep pointcloud generation robust even without color texture.
                 'pointcloud__neon_.allow_no_texture_points': True,
-
-                # False is lighter and usually enough for visualization.
                 'pointcloud__neon_.ordered_pc': False,
 
                 # ---------------------------------------------------------
                 # TF
                 # ---------------------------------------------------------
-                # Keep this true so RealSense publishes optical frames.
-                # URDF/robot_state_publisher owns the manipulator mounting TF
-                # up to camera_link; RealSense owns camera optical frames.
+                # URDF owns mounting TF up to camera_link.
+                # RealSense owns optical frames such as camera_depth_optical_frame.
                 'publish_tf': True,
-
-                # 0.0 means static TF behavior for camera frames.
                 'tf_publish_rate': 0.0,
 
                 # ---------------------------------------------------------
@@ -149,10 +152,6 @@ def generate_launch_description():
     # =========================================================
     # Object distance node
     # =========================================================
-    # Uses:
-    #   /detections
-    #   /camera/camera/aligned_depth_to_color/image_raw
-    #   /camera/camera/color/camera_info
     object_distance_node = Node(
         package='camera_perception_pkg',
         executable='object_distance_node',
@@ -183,9 +182,6 @@ def generate_launch_description():
     # =========================================================
     # YOLOv8 debug node
     # =========================================================
-    # Can be turned on/off:
-    #   use_yolo_debug:=true
-    #   use_yolo_debug:=false
     yolov8_debug_node = Node(
         package='camera_perception_pkg',
         executable='yolov8_debug_node',
@@ -203,15 +199,14 @@ def generate_launch_description():
     # =========================================================
     # No rs_setup.
     # No topic_gate.
-    # No ros2 param list/set.
+    # No runtime parameter service dependency.
     #
-    # ROS subscriptions will connect automatically when the camera topics appear.
-    # This avoids deadlocks from slow parameter service or CLI discovery.
+    # ROS subscriptions connect automatically when camera topics appear.
     return LaunchDescription([
         declare_use_yolo_debug,
         declare_initial_reset,
+        declare_enable_realsense_sync,
 
-        # 1. RealSense first.
         TimerAction(
             period=1.0,
             actions=[
@@ -219,7 +214,6 @@ def generate_launch_description():
             ]
         ),
 
-        # 2. Depth/object-distance node.
         TimerAction(
             period=18.0,
             actions=[
@@ -227,17 +221,15 @@ def generate_launch_description():
             ]
         ),
 
-        # 3. YOLO after camera has had time to stabilize.
         TimerAction(
-            period=22.0,
+            period=24.0,
             actions=[
                 yolov8_node
             ]
         ),
 
-        # 4. Debug node last, optional.
         TimerAction(
-            period=30.0,
+            period=34.0,
             actions=[
                 yolov8_debug_node
             ]
