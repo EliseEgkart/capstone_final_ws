@@ -29,7 +29,7 @@ manipulator_task_manager_v2:
     return_home_after_prepress: true
     return_home_after_unload: true
 
-    marker_settle_sec: 2.0
+    marker_settle_sec: 3.0
     outside_align_timeout_sec: 12.0
     inside_align_timeout_sec: 12.0
     prepress_timeout_sec: 25.0

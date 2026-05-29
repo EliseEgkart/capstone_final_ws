@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Top-level manipulator task FSM v2.
 
-The v2 path keeps the external task command topic but replaces the direct
-button press step with marker_prepress_commander_v2. A button task is complete
-when the end effector reaches the configured pre-contact target.
+The v2 path keeps the external task command topic and delegates marker-based
+button approach to marker_prepress_commander_v2. Depending on that node's
+configuration, a button task can stop at pre-contact or continue through a
+short radial press and release.
 """
 
 from __future__ import annotations
@@ -91,7 +92,7 @@ class ManipulatorTaskManagerV2(Node):
         self.declare_parameter("unload_assume_done_delay_sec", 5.0)
         self.declare_parameter("return_home_after_prepress", True)
         self.declare_parameter("return_home_after_unload", True)
-        self.declare_parameter("marker_settle_sec", 2.0)
+        self.declare_parameter("marker_settle_sec", 3.0)
 
         self.declare_parameter("outside_align_timeout_sec", 12.0)
         self.declare_parameter("inside_align_timeout_sec", 12.0)
@@ -219,7 +220,7 @@ class ManipulatorTaskManagerV2(Node):
 
         self.get_logger().info("[task_manager_v2] ready")
         self.get_logger().info(
-            "[task_manager_v2] button stage=prepress only, no contact press"
+            "[task_manager_v2] button stage=radial prepress, optional press"
         )
         self._publish_state()
 
@@ -384,7 +385,7 @@ class ManipulatorTaskManagerV2(Node):
         if self._state != "PREPRESSING":
             return
 
-        if text.startswith("prepress_done"):
+        if text.startswith("prepress_done") or text.startswith("press_done"):
             done_result = self._active_done_result or "PREPRESS_DONE"
             if self.return_home_after_prepress:
                 self._start_home("PREPRESS_HOMING", done_result)

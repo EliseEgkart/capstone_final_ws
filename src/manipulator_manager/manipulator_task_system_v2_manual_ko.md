@@ -2,17 +2,20 @@
 
 ## 1. v2 목적
 
-v2는 기존 버튼 누르기 동작을 바로 수행하지 않는다.
+v2는 기본 설정에서는 버튼 바로 앞 정렬까지만 수행한다.
+`enable_press: true`로 켜면 같은 방사 벡터를 재사용해서 짧은 누르기와 release까지 수행한다.
 
 ```text
 기존 v1:
 scan 자세 이동 -> marker 획득 -> EE를 marker+offset으로 바로 이동
 
 v2:
-scan 자세 이동 -> marker 획득 -> profile 기반 pre-contact 위치로 이동
+scan 자세 이동 -> 3초 안정화 -> marker 재수집 -> profile 기반 pre-contact 위치로 이동
+press enabled:
+scan 자세 이동 -> 3초 안정화 -> marker 재수집 -> pre-contact 위치로 이동 -> 저장된 방사 벡터로 press -> release
 ```
 
-즉 v2의 목표는 버튼을 실제로 누르는 것이 아니라, EE가 버튼 바로 앞 위치까지 안정적으로 도달하는지 검증하는 것이다.
+즉 v2의 1차 목표는 EE가 버튼 바로 앞 위치까지 안정적으로 도달하는지 검증하는 것이다. press는 이 검증 이후 `enable_press`를 켜서 추가한다.
 
 ---
 
@@ -338,7 +341,9 @@ ros2 topic pub --once /marker_prepress_commander_v2/cmd std_msgs/msg/String "{da
 
 ## 10. v2 Profile 개념
 
-profile은 버튼 접근 방향을 정의한다.
+profile은 버튼 접근 방향과 pre-contact 거리를 정의한다.
+
+기본 방식은 `radial_from_frame`이다. marker에 단순히 camera x/y축 offset을 더하지 않고, marker를 `link1` 기준으로 변환한 뒤 로봇 기준 방사 방향으로 `standoff_m`만큼 앞에 선다. 전면 버튼과 오른쪽 버튼 모두 로봇의 현재 접근 각도를 반영하기 위한 방식이다.
 
 설정 파일:
 
@@ -364,16 +369,26 @@ inside_right_standoff_m: 0.035
 inside_right_offset_x: 0.0
 inside_right_offset_y: 0.0
 inside_right_offset_z: 0.0
+inside_right_approach_mode: radial_from_frame
+inside_right_radial_frame: link1
+inside_right_radial_plane: "xy"
+inside_right_radial_min_norm_m: 0.05
+inside_right_press_travel_m: 0.045
 ```
 
 의미:
 
 ```text
-approach_frame : marker와 접근 방향을 해석할 frame
-approach_axis  : x, y, z 중 standoff를 적용할 축
-approach_sign  : +1 또는 -1 방향
-standoff_m     : 버튼 marker에서 얼마나 떨어진 pre-contact 위치를 잡을지
-offset_*       : marker 중심과 실제 목표점 사이의 미세 보정
+approach_frame     : marker와 offset을 먼저 해석할 frame
+approach_axis      : approach_mode가 axis일 때만 사용하는 fallback 축
+approach_sign      : standoff 방향. -1이면 marker에서 로봇 쪽으로 물러남
+standoff_m         : 버튼 marker에서 얼마나 떨어진 pre-contact 위치를 잡을지
+offset_*           : marker 중심과 실제 목표점 사이의 미세 보정
+approach_mode      : 기본 radial_from_frame
+radial_frame       : 방사 방향을 계산할 frame. 기본 link1
+radial_plane       : 방사 방향 계산 평면. 기본 xy
+radial_min_norm_m  : marker가 기준점에 너무 가까울 때 계산을 막는 최소 거리
+press_travel_m     : enable_press가 true일 때 pre-contact에서 버튼 방향으로 더 전진할 거리
 ```
 
 주의:
@@ -387,23 +402,35 @@ YAML에서 x/y/z는 반드시 따옴표를 붙인다.
 
 ---
 
-## 11. Marker 수집 방식
+## 11. 안정화 및 Marker 수집 방식
 
-v2는 marker 10개가 쌓일 때까지 기다리지 않는다.
+v2는 scan 자세에 도달하자마자 받은 marker를 바로 쓰지 않는다.
+
+Task Manager가 먼저 안정화 시간을 둔다.
+
+```yaml
+marker_settle_sec: 3.0
+```
+
+이 3초 동안 로봇팔 진동과 카메라 시야 흔들림이 줄어들기를 기다린다. 그 다음 `marker_prepress_commander_v2`가 새로 들어온 marker만 모아서 median을 계산한다.
 
 기본 설정:
 
 ```yaml
-marker_collect_sec: 0.5
+marker_collect_sec: 0.7
 preferred_marker_samples: 5
 min_marker_samples: 1
 marker_timeout_sec: 3.0
+allow_recent_marker: false
 ```
 
 동작:
 
 ```text
-0.5초 동안 가능한 만큼 marker를 수집
+scan 자세 도달
+3초 안정화
+prepress 명령 시작 시 기존 marker buffer 비움
+0.7초 동안 새로 들어온 marker를 수집
 5개 이상이면 최근 marker들의 median 사용
 1~4개만 있으면 가진 데이터 안에서 median 사용
 0개면 prepress_failed:no_recent_marker
@@ -459,15 +486,24 @@ inside_front_standoff_m: 0.045
 
 ### 4단계: 접근 방향 튜닝
 
+기본은 `link1` 기준 xy 평면 방사 방향이다.
+
+```yaml
+inside_right_approach_mode: radial_from_frame
+inside_right_radial_frame: link1
+inside_right_radial_plane: "xy"
+```
+
 EE가 버튼의 반대 방향으로 멀어지면 `approach_sign`을 반대로 바꾼다.
 
 ```yaml
 inside_right_approach_sign: 1.0
 ```
 
-오른쪽 버튼 접근 방향이 맞지 않으면 축을 바꾼다.
+방사 방향 대신 고정축 테스트가 필요할 때만 `approach_mode`를 `axis`로 바꾼다.
 
 ```yaml
+inside_right_approach_mode: axis
 inside_right_approach_axis: "x"
 ```
 
@@ -482,6 +518,28 @@ inside_front_offset_z: -0.003
 ```
 
 offset은 한 번에 크게 바꾸지 말고 2~5mm 단위로 조정한다.
+
+### 6단계: press 활성화
+
+pre-contact 위치가 안정적으로 맞은 뒤에만 press를 켠다.
+
+```yaml
+enable_press: true
+press_hold_sec: 0.2
+release_after_press: true
+inside_right_press_travel_m: 0.045
+```
+
+press 단계에서는 marker를 다시 수집하지 않는다. pre-contact 목표를 만들 때 저장한 `link1` 기준 방사 unit vector를 그대로 사용한다.
+
+```text
+pre-contact 위치
+-> 저장된 press vector 방향으로 press_travel_m 전진
+-> press_hold_sec 동안 유지
+-> pre-contact 위치로 release
+```
+
+버튼까지 닿지 않으면 `*_press_travel_m`을 2~3mm씩 늘리고, 너무 깊게 누르면 줄인다.
 
 ---
 
@@ -512,6 +570,9 @@ Prepress commander 직접 결과:
 prepress_done:outside_front
 prepress_done:inside_front
 prepress_done:inside_right
+press_done:outside_front
+press_done:inside_front
+press_done:inside_right
 prepress_failed:no_recent_marker
 prepress_failed:target_transform_failed
 prepress_failed:goal_rejected
@@ -524,10 +585,11 @@ prepress_failed:execution_failed:...
 
 ### marker_prepress_commander_v2가 바로 죽는 경우
 
-`approach_axis`가 따옴표로 감싸져 있는지 확인한다.
+`approach_axis` 또는 `radial_plane`이 따옴표로 감싸져 있는지 확인한다.
 
 ```yaml
 inside_right_approach_axis: "y"
+inside_right_radial_plane: "xy"
 ```
 
 ### prepress_failed:no_recent_marker
@@ -588,8 +650,9 @@ v1 marker_button_press_commander:
   결과: OUTSIDE_BTN_DONE / INSIDE_*_DONE
 
 v2 marker_prepress_commander_v2:
-  marker 위치에서 profile별 standoff를 적용한 pre-contact 위치로 이동
-  실제 press depth 없음
+  3초 안정화 이후 marker를 새로 수집
+  marker 위치에서 link1 방사 방향 standoff를 적용한 pre-contact 위치로 이동
+  enable_press가 true이면 저장된 같은 방사 벡터로 press/release 수행
   결과: *_PREPRESS_DONE
 ```
 
