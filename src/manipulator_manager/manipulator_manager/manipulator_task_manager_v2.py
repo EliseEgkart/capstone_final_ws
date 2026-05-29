@@ -41,6 +41,7 @@ BUTTON_TASK_COMMANDS = (
 )
 
 RESULT_OUTSIDE_BTN_DONE = "OUTSIDE_BTN_DONE"
+RESULT_INSIDE_BTN_DONE = "INSIDE_BTN_DONE"
 RESULT_INSIDE_B1_BTN_DONE = "INSIDE_B1_BTN_DONE"
 RESULT_INSIDE_3F_BTN_DONE = "INSIDE_3F_BTN_DONE"
 RESULT_UNLOAD_DONE = "UNLOAD_DONE"
@@ -292,7 +293,7 @@ class ManipulatorTaskManagerV2(Node):
                 task=cmd,
                 perception_target=self.perception_inside_b1,
                 profile="inside_b1_front",
-                done_result=RESULT_INSIDE_B1_BTN_DONE,
+                done_result=RESULT_INSIDE_BTN_DONE,
             )
             return
         if cmd == CMD_INSIDE_B1_BTN_FRONT:

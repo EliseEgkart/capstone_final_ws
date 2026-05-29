@@ -217,7 +217,7 @@ ros2 topic pub --once /manipulator_task_cmd std_msgs/msg/String "{data: 'INSIDE_
 결과:
 
 ```text
-INSIDE_B1_BTN_DONE
+INSIDE_BTN_DONE
 ```
 
 ### 내부 3층 전면 접근
@@ -618,7 +618,7 @@ inside_b1_front_offset_z: 0.010
 inside_b1_front_press_travel_m: 0.045
 ```
 
-`INSIDE_B1_BTN_FRONT`와 legacy `INSIDE_BTN_FRONT`는 `inside_b1_front` profile을 사용한다. B1 전면 버튼의 높이 오차는 여기서 조정한다.
+`INSIDE_B1_BTN_FRONT`와 legacy `INSIDE_BTN_FRONT`는 둘 다 `inside_b1_front` profile을 사용한다. 단, 외부 결과 문자열은 다르다. `INSIDE_B1_BTN_FRONT`는 `INSIDE_B1_BTN_DONE`, `INSIDE_BTN_FRONT`는 `elevator_delivery_final_with_manipulator` 호환을 위해 `INSIDE_BTN_DONE`을 반환한다.
 
 증상별 조정:
 
@@ -702,6 +702,7 @@ press_travel_m : 0.002 ~ 0.003 m
 
 ```text
 OUTSIDE_BTN_DONE
+INSIDE_BTN_DONE
 INSIDE_B1_BTN_DONE
 INSIDE_3F_BTN_DONE
 UNLOAD_DONE
