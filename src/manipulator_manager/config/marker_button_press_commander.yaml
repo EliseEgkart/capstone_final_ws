@@ -18,17 +18,14 @@ marker_button_press_commander:
     target_frame: link1
 
     # =========================================================
-    # Marker validity / smoothing
+    # Marker validity
     # =========================================================
     marker_timeout_sec: 3.0
-    marker_window_size: 5
-    smoothing_method: median
 
     # =========================================================
     # Position tolerance
     # =========================================================
     position_tolerance_m: 0.005
-    press_position_tolerance_m: 0.004
 
     # =========================================================
     # Basic motion options
@@ -59,23 +56,6 @@ marker_button_press_commander:
     button_offset_x: 0.000
     button_offset_y: 0.000
     button_offset_z: 0.000
-
-    press_axis: "-x"
-
-    approach_distance_m: 0.05
-    press_depth_m: 0.000
-    retreat_distance_m: 0.05
-    press_hold_sec: 0.3
-
-    press_intermediate_steps: 2
-
-    approach_velocity_scaling: 0.15
-    press_velocity_scaling: 0.03
-    retreat_velocity_scaling: 0.15
-
-    approach_acceleration_scaling: 0.15
-    press_acceleration_scaling: 0.03
-    retreat_acceleration_scaling: 0.15
 
     # =========================================================
     # End-effector orientation

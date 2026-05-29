@@ -2,8 +2,6 @@
 """
 marker_button_press_commander.py
 
-이 버전은 잘 동작했던 marker_moveit_commander 로직을 그대로 기반으로 한다.
-
 핵심 로직:
   - /object_3d_marker의 마지막 Marker 1개만 사용
   - Marker를 target_frame으로 TF 변환
@@ -19,7 +17,7 @@ marker_button_press_commander.py
 
 주의:
   - 기존 APPROACH -> PRESS -> HOLD -> RETREAT 분할 방식은 사용하지 않는다.
-  - 버튼 누르기 깊이/방향은 press_axis, press_depth가 아니라 outside/inside offset으로 조정한다.
+  - 버튼 누르기 목표점은 outside/inside offset으로 조정한다.
   - home 복귀는 manipulator_task_manager.py가 담당한다.
 """
 
@@ -558,7 +556,7 @@ class MarkerButtonPressCommander(Node):
         constraints = Constraints()
         constraints.position_constraints.append(position_constraint)
 
-        # 잘 되던 marker_moveit_commander와 동일하게 orientation constraint를 항상 넣는다.
+        # 기존에 검증된 방식과 동일하게 orientation constraint를 항상 넣는다.
         constraints.orientation_constraints.append(orientation_constraint)
 
         goal = MoveGroup.Goal()

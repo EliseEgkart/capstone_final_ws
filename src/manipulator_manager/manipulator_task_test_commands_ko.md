@@ -424,22 +424,22 @@ ros2 topic pub --once /marker_button_press_commander/cmd std_msgs/msg/String "{d
 ### Marker Button Press Commander 파라미터 확인
 
 ```bash
-ros2 param get /marker_button_press_commander use_orientation_constraint
-ros2 param get /marker_button_press_commander approach_distance_m
-ros2 param get /marker_button_press_commander press_depth_m
-ros2 param get /marker_button_press_commander retreat_distance_m
+ros2 param get /marker_button_press_commander marker_timeout_sec
+ros2 param get /marker_button_press_commander position_tolerance_m
+ros2 param get /marker_button_press_commander outside_offset_x
+ros2 param get /marker_button_press_commander inside_offset_x
+ros2 param get /marker_button_press_commander plan_only
 ```
 
 처음 테스트 권장값:
 
 ```text
-use_orientation_constraint: false
-approach_distance_m: 0.03
-press_depth_m: 0.0 또는 0.003
-retreat_distance_m: 0.03
+marker_timeout_sec: 3.0
+position_tolerance_m: 0.005
+plan_only: true
 ```
 
-`press_depth_m: 0.0`은 실제로 버튼을 누르지 않고 접근/복귀 동작만 확인하는 테스트용이다.
+현재 버튼 누르기는 approach/press/retreat 분할 동작이 아니라 marker 위치에 outside/inside offset을 적용한 단일 MoveIt goal로 실행한다.
 
 ---
 
@@ -535,22 +535,23 @@ plan only에서 경로가 정상적으로 생성되는 것을 확인한 뒤 실�
 ros2 launch manipulator_manager manipulator_task_system.launch.py button_plan_only:=false unload_wait_for_result:=false
 ```
 
-실제 버튼을 누르기 전에는 `press_depth_m`을 작게 둔다.
+실제 버튼을 누르기 전에는 plan only에서 목표점과 경로를 먼저 확인한다.
 
 ```yaml
-press_depth_m: 0.003
-press_velocity_scaling: 0.02
-press_acceleration_scaling: 0.02
+plan_only: true
 ```
 
-성공률을 보면서 조금씩 증가시킨다.
+실제 누르는 위치는 outside/inside offset으로 조정한다.
 
 ```yaml
-press_depth_m: 0.005
+outside_offset_x: 0.050
+inside_offset_x: 0.025
 ```
 
 ```yaml
-press_depth_m: 0.006
+button_offset_x: 0.000
+button_offset_y: 0.000
+button_offset_z: 0.000
 ```
 
 ---

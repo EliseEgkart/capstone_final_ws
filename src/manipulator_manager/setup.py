@@ -45,7 +45,6 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'marker_moveit_commander = manipulator_manager.marker_moveit_commander:main',
             'arm_pose_commander = manipulator_manager.arm_pose_commander:main',
             'marker_button_press_commander = manipulator_manager.marker_button_press_commander:main',
             'manipulator_task_manager = manipulator_manager.manipulator_task_manager:main',
