@@ -90,6 +90,7 @@ class ManipulatorTaskManagerV2(Node):
         self.declare_parameter("return_home_after_prepress", True)
         self.declare_parameter("return_home_after_unload", True)
         self.declare_parameter("complete_button_on_prepress_failure", True)
+        self.declare_parameter("publish_button_done_on_prepress_start", True)
         self.declare_parameter("marker_settle_sec", 3.0)
 
         self.declare_parameter("outside_align_timeout_sec", 12.0)
@@ -147,6 +148,9 @@ class ManipulatorTaskManagerV2(Node):
         self.complete_button_on_prepress_failure = bool(
             self.get_parameter("complete_button_on_prepress_failure").value
         )
+        self.publish_button_done_on_prepress_start = bool(
+            self.get_parameter("publish_button_done_on_prepress_start").value
+        )
         self.marker_settle_sec = float(self.get_parameter("marker_settle_sec").value)
         self.outside_align_timeout_sec = float(
             self.get_parameter("outside_align_timeout_sec").value
@@ -171,6 +175,7 @@ class ManipulatorTaskManagerV2(Node):
         self._deadline = None
         self._delay_until = None
         self._pending_result_after_home: Optional[str] = None
+        self._button_done_published = False
 
         self.task_cmd_sub = self.create_subscription(
             String,
@@ -329,6 +334,7 @@ class ManipulatorTaskManagerV2(Node):
         self._active_task = task
         self._active_profile = profile
         self._active_done_result = done_result
+        self._button_done_published = False
         self._publish_perception_target(perception_target)
         self._publish_prepress_cmd(PREPRESS_CLEAR)
         self._set_state(align_state)
@@ -421,13 +427,21 @@ class ManipulatorTaskManagerV2(Node):
         self._set_state("PREPRESSING")
         self._set_deadline(self.prepress_timeout_sec)
         self._publish_prepress_cmd(self._active_profile)
+        if self.publish_button_done_on_prepress_start:
+            self._publish_button_done_once(self._active_done_result or "BUTTON_DONE")
 
     def _finish_button_attempt(self, done_result: str) -> None:
-        self._publish_result(done_result)
+        self._publish_button_done_once(done_result)
         if self.return_home_after_prepress:
             self._start_home("PREPRESS_HOMING")
             return
         self._reset_to_idle()
+
+    def _publish_button_done_once(self, done_result: str) -> None:
+        if self._button_done_published:
+            return
+        self._publish_result(done_result)
+        self._button_done_published = True
 
     def _start_destination_unload_task(self) -> None:
         if not self._accept_new_task(CMD_DESTINATION_UNLOAD):
@@ -520,10 +534,18 @@ class ManipulatorTaskManagerV2(Node):
         self._deadline = None
         self._delay_until = None
         self._pending_result_after_home = None
+        self._button_done_published = False
         self._set_state("IDLE")
 
     def _accept_new_task(self, task_name: str) -> bool:
         if self._state != "IDLE":
+            if (
+                task_name == self._active_task
+                and self._button_done_published
+                and self._active_done_result is not None
+            ):
+                self._publish_result(self._active_done_result)
+                return False
             self._publish_result(
                 f"BUSY:CURRENT_STATE={self._state},CURRENT_TASK={self._active_task}"
             )

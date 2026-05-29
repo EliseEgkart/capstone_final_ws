@@ -555,7 +555,147 @@ pre-contact 위치
 
 ---
 
-## 13. 예상 결과 문자열
+## 13. 외부 Down / 내부 B1 튜닝 팁
+
+데모에서 주로 조정할 버튼은 다음 두 종류다.
+
+```text
+OUTSIDE_BTN_FRONT     -> outside_front profile
+INSIDE_B1_BTN_FRONT   -> inside_b1_front profile
+INSIDE_B1_BTN_RIGHT   -> inside_b1_right profile
+```
+
+3F 버튼은 `inside_front`, `inside_right`를 사용한다. B1만 보정하려면 반드시 `inside_b1_front`, `inside_b1_right`만 수정한다.
+
+### 외부 Down 버튼
+
+관련 설정:
+
+```yaml
+outside_front_standoff_m: 0.035
+outside_front_offset_x: 0.0
+outside_front_offset_y: 0.0
+outside_front_offset_z: 0.010
+outside_front_press_travel_m: 0.045
+```
+
+현재 `outside_front_offset_z: 0.010`은 실제 EE가 인식 위치보다 아래를 찍는 오차를 보정하기 위해 목표점을 1cm 위로 올리는 값이다.
+
+증상별 조정:
+
+```text
+실제 타점이 아직 낮다
+-> outside_front_offset_z를 0.012, 0.015처럼 2~3mm씩 증가
+
+실제 타점이 너무 높다
+-> outside_front_offset_z를 0.008, 0.005처럼 감소
+
+버튼 앞에서 멈추고 닿지 않는다
+-> outside_front_press_travel_m을 0.047, 0.050처럼 증가
+
+버튼을 너무 깊게 밀거나 패널을 강하게 친다
+-> outside_front_press_travel_m을 0.042, 0.040처럼 감소
+
+pre-contact 위치부터 버튼에 너무 붙어 있다
+-> outside_front_standoff_m을 0.040, 0.045처럼 증가
+
+pre-contact 위치가 버튼에서 너무 멀다
+-> outside_front_standoff_m을 0.032, 0.030처럼 감소
+```
+
+외부 down 버튼은 `outside_front`만 쓰므로 이 profile을 수정해도 내부 B1/3F에는 영향을 주지 않는다.
+
+### 내부 B1 전면 버튼
+
+관련 설정:
+
+```yaml
+inside_b1_front_standoff_m: 0.035
+inside_b1_front_offset_x: 0.0
+inside_b1_front_offset_y: 0.0
+inside_b1_front_offset_z: 0.010
+inside_b1_front_press_travel_m: 0.045
+```
+
+`INSIDE_B1_BTN_FRONT`와 legacy `INSIDE_BTN_FRONT`는 `inside_b1_front` profile을 사용한다. B1 전면 버튼의 높이 오차는 여기서 조정한다.
+
+증상별 조정:
+
+```text
+B1 전면 버튼 타점이 낮다
+-> inside_b1_front_offset_z를 0.012, 0.015처럼 증가
+
+B1 전면 버튼 타점이 높다
+-> inside_b1_front_offset_z를 0.008, 0.005처럼 감소
+
+B1 전면 버튼이 눌리지 않고 앞에서 멈춘다
+-> inside_b1_front_press_travel_m을 0.047, 0.050처럼 증가
+
+B1 전면 버튼을 너무 세게 누른다
+-> inside_b1_front_press_travel_m을 0.042, 0.040처럼 감소
+
+B1 전면 pre-contact가 너무 가깝다
+-> inside_b1_front_standoff_m을 0.040, 0.045처럼 증가
+
+B1 전면 pre-contact가 너무 멀다
+-> inside_b1_front_standoff_m을 0.032, 0.030처럼 감소
+```
+
+### 내부 B1 오른쪽 버튼
+
+관련 설정:
+
+```yaml
+inside_b1_right_standoff_m: 0.035
+inside_b1_right_offset_x: 0.0
+inside_b1_right_offset_y: 0.0
+inside_b1_right_offset_z: 0.010
+inside_b1_right_press_travel_m: 0.055
+```
+
+`INSIDE_B1_BTN_RIGHT`는 `inside_b1_right` profile을 사용한다. 오른쪽 버튼은 접근 방향이 전면과 다르므로 `inside_b1_front`가 아니라 `inside_b1_right`를 조정한다.
+
+증상별 조정:
+
+```text
+B1 오른쪽 버튼 타점이 낮다
+-> inside_b1_right_offset_z를 0.012, 0.015처럼 증가
+
+B1 오른쪽 버튼 타점이 높다
+-> inside_b1_right_offset_z를 0.008, 0.005처럼 감소
+
+B1 오른쪽 버튼이 덜 눌린다
+-> inside_b1_right_press_travel_m을 0.057, 0.060처럼 증가
+
+B1 오른쪽 버튼을 너무 깊게 누른다
+-> inside_b1_right_press_travel_m을 0.052, 0.050처럼 감소
+
+B1 오른쪽에서 EE가 버튼 반대 방향으로 움직인다
+-> inside_b1_right_approach_sign을 1.0으로 바꿔 테스트
+```
+
+### 튜닝 순서 권장
+
+한 번에 하나의 파라미터만 바꾼다.
+
+```text
+1. offset_z로 위/아래 타점 보정
+2. standoff_m으로 버튼 앞 정렬 거리 보정
+3. press_travel_m으로 실제 누르는 깊이 보정
+4. 접근 방향이 반대일 때만 approach_sign 보정
+```
+
+권장 변경 단위:
+
+```text
+offset_z       : 0.002 ~ 0.003 m
+standoff_m     : 0.003 ~ 0.005 m
+press_travel_m : 0.002 ~ 0.003 m
+```
+
+---
+
+## 14. 예상 결과 문자열
 
 성공:
 
@@ -567,7 +707,14 @@ UNLOAD_DONE
 HOME_DONE
 ```
 
-데모 모드에서는 prepress/press가 실패해도 에러를 기록한 뒤 버튼 task는 위 DONE 문자열로 즉시 완료 처리한다. home 복귀는 내부적으로 계속 수행된다. 이 동작은 `complete_button_on_prepress_failure`로 제어한다.
+데모 모드에서는 버튼 동작을 시작하는 순간 위 DONE 문자열을 즉시 발행한다. 이후 prepress/press가 실패해도 에러만 기록하고 home 복귀는 내부적으로 계속 수행된다.
+
+```yaml
+publish_button_done_on_prepress_start: true
+complete_button_on_prepress_failure: true
+```
+
+상위 시스템이 같은 버튼 명령을 다시 보내도, 로봇팔이 아직 동작 중이고 이미 DONE을 보낸 상태라면 같은 DONE을 다시 발행한다.
 
 실패:
 
@@ -579,9 +726,13 @@ Prepress commander 직접 결과:
 
 ```text
 prepress_done:outside_front
+prepress_done:inside_b1_front
+prepress_done:inside_b1_right
 prepress_done:inside_front
 prepress_done:inside_right
 press_done:outside_front
+press_done:inside_b1_front
+press_done:inside_b1_right
 press_done:inside_front
 press_done:inside_right
 prepress_failed:no_recent_marker
@@ -592,7 +743,7 @@ prepress_failed:execution_failed:...
 
 ---
 
-## 14. 문제 상황별 확인
+## 15. 문제 상황별 확인
 
 ### marker_prepress_commander_v2가 바로 죽는 경우
 
@@ -653,7 +804,7 @@ max_acceleration_scaling: 0.10
 
 ---
 
-## 15. v1과 v2 차이
+## 16. v1과 v2 차이
 
 ```text
 v1 marker_button_press_commander:
