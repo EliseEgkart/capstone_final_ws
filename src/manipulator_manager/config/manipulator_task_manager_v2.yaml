@@ -29,7 +29,7 @@ manipulator_task_manager_v2:
     return_home_after_prepress: true
     return_home_after_unload: true
     complete_button_on_prepress_failure: true
-    publish_button_done_on_prepress_start: true
+    publish_button_done_on_prepress_start: false
 
     marker_settle_sec: 3.0
     outside_align_timeout_sec: 12.0

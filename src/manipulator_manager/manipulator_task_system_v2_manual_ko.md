@@ -191,8 +191,9 @@ OUTSIDE_BTN_FRONT
 -> outside_scan 자세
 -> marker settle
 -> prepress profile outside_front
+-> press/release 수행
+-> home 복귀 완료
 -> OUTSIDE_BTN_DONE
--> home 복귀는 내부적으로 계속 수행
 ```
 
 ### 내부 B1 전면 접근
@@ -707,14 +708,14 @@ UNLOAD_DONE
 HOME_DONE
 ```
 
-데모 모드에서는 버튼 동작을 시작하는 순간 위 DONE 문자열을 즉시 발행한다. 이후 prepress/press가 실패해도 에러만 기록하고 home 복귀는 내부적으로 계속 수행된다.
+데모 모드에서도 버튼 동작 중에는 DONE을 보내지 않는다. prepress/press가 성공하거나 실패한 뒤 로봇팔이 home으로 복귀하면 위 DONE 문자열을 발행한다. 그래야 AMR이 로봇팔 복귀 전에 움직이지 않는다.
 
 ```yaml
-publish_button_done_on_prepress_start: true
+publish_button_done_on_prepress_start: false
 complete_button_on_prepress_failure: true
 ```
 
-상위 시스템이 같은 버튼 명령을 다시 보내도, 로봇팔이 아직 동작 중이고 이미 DONE을 보낸 상태라면 같은 DONE을 다시 발행한다.
+`complete_button_on_prepress_failure: true`이면 버튼 누르기 성공 여부와 관계없이 home 복귀 후 DONE을 발행한다.
 
 실패:
 

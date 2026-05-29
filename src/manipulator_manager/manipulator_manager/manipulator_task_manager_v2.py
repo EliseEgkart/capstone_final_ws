@@ -90,7 +90,7 @@ class ManipulatorTaskManagerV2(Node):
         self.declare_parameter("return_home_after_prepress", True)
         self.declare_parameter("return_home_after_unload", True)
         self.declare_parameter("complete_button_on_prepress_failure", True)
-        self.declare_parameter("publish_button_done_on_prepress_start", True)
+        self.declare_parameter("publish_button_done_on_prepress_start", False)
         self.declare_parameter("marker_settle_sec", 3.0)
 
         self.declare_parameter("outside_align_timeout_sec", 12.0)
@@ -431,10 +431,10 @@ class ManipulatorTaskManagerV2(Node):
             self._publish_button_done_once(self._active_done_result or "BUTTON_DONE")
 
     def _finish_button_attempt(self, done_result: str) -> None:
-        self._publish_button_done_once(done_result)
         if self.return_home_after_prepress:
-            self._start_home("PREPRESS_HOMING")
+            self._start_home("PREPRESS_HOMING", done_result)
             return
+        self._publish_button_done_once(done_result)
         self._reset_to_idle()
 
     def _publish_button_done_once(self, done_result: str) -> None:
