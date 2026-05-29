@@ -40,7 +40,7 @@ maps:
 
     elevator_btn_inside:
       x: 45.4
-      y: -3.28
+      y: -3.33
       yaw: 0.0290
 
     elevator_inside_for_exit:

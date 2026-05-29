@@ -9,8 +9,8 @@ object_distance_node:
     # depth_camera_info_topic: /camera/camera/aligned_depth_to_color/camera_info
 
     target_label_prefixes:
-      - elevator_btn_2
-
+      # - btn_down
+      - elevator_btn_under1
     target_button_topic: /manipulator_perception/target_button
 
     base_frame: camera_link
