@@ -21,7 +21,7 @@ maps:
       yaw: 1.4309
 
     elevator_btn_front:
-      x: 43.1200
+      x: 43.1000
       y: -3.4000
       yaw: 0.0530
       # x: 43.3255
@@ -30,7 +30,7 @@ maps:
 
     elevator_front:
       x: 43.3255
-      y: -2.8970
+      y: -2.9270
       yaw: 0.0356
 
     elevator_inside:
