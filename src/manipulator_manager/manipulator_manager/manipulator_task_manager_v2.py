@@ -257,7 +257,7 @@ class ManipulatorTaskManagerV2(Node):
             self._start_inside_button_task(
                 cmd,
                 self.perception_inside_b1,
-                "inside_front",
+                "inside_b1_front",
                 RESULT_INSIDE_B1_BTN_DONE,
             )
             return
@@ -265,7 +265,7 @@ class ManipulatorTaskManagerV2(Node):
             self._start_inside_button_task(
                 cmd,
                 self.perception_inside_b1,
-                "inside_front",
+                "inside_b1_front",
                 RESULT_INSIDE_B1_BTN_DONE,
             )
             return
@@ -281,7 +281,7 @@ class ManipulatorTaskManagerV2(Node):
             self._start_inside_button_task(
                 cmd,
                 self.perception_inside_b1,
-                "inside_right",
+                "inside_b1_right",
                 RESULT_INSIDE_B1_BTN_DONE,
             )
             return

@@ -50,6 +50,8 @@ marker_prepress_commander_v2:
 
     profile_names:
       - outside_front
+      - inside_b1_front
+      - inside_b1_right
       - inside_front
       - inside_right
 
@@ -64,12 +66,39 @@ marker_prepress_commander_v2:
     outside_front_standoff_m: 0.035
     outside_front_offset_x: 0.0
     outside_front_offset_y: 0.0
-    outside_front_offset_z: 0.0
+    outside_front_offset_z: 0.010
     outside_front_approach_mode: radial_from_frame
     outside_front_radial_frame: link1
     outside_front_radial_plane: "xy"
     outside_front_radial_min_norm_m: 0.05
     outside_front_press_travel_m: 0.045
+
+    # B1 is calibrated separately so 3F can keep its own center offset.
+    inside_b1_front_approach_frame: camera_link
+    inside_b1_front_approach_axis: "x"
+    inside_b1_front_approach_sign: -1.0
+    inside_b1_front_standoff_m: 0.035
+    inside_b1_front_offset_x: 0.0
+    inside_b1_front_offset_y: 0.0
+    inside_b1_front_offset_z: 0.010
+    inside_b1_front_approach_mode: radial_from_frame
+    inside_b1_front_radial_frame: link1
+    inside_b1_front_radial_plane: "xy"
+    inside_b1_front_radial_min_norm_m: 0.05
+    inside_b1_front_press_travel_m: 0.045
+
+    inside_b1_right_approach_frame: camera_link
+    inside_b1_right_approach_axis: "y"
+    inside_b1_right_approach_sign: -1.0
+    inside_b1_right_standoff_m: 0.035
+    inside_b1_right_offset_x: 0.0
+    inside_b1_right_offset_y: 0.0
+    inside_b1_right_offset_z: 0.010
+    inside_b1_right_approach_mode: radial_from_frame
+    inside_b1_right_radial_frame: link1
+    inside_b1_right_radial_plane: "xy"
+    inside_b1_right_radial_min_norm_m: 0.05
+    inside_b1_right_press_travel_m: 0.055
 
     inside_front_approach_frame: camera_link
     inside_front_approach_axis: "x"

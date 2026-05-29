@@ -355,11 +355,13 @@ src/manipulator_manager/config/marker_prepress_commander_v2.yaml
 
 ```text
 outside_front
+inside_b1_front
+inside_b1_right
 inside_front
 inside_right
 ```
 
-각 profile은 다음 파라미터를 가진다.
+각 profile은 다음 파라미터를 가진다. B1은 실제 EE가 낮게 찍히는 보정을 분리하기 위해 `inside_b1_front`, `inside_b1_right` profile을 사용한다.
 
 ```yaml
 inside_right_approach_frame: camera_link
@@ -375,6 +377,16 @@ inside_right_radial_plane: "xy"
 inside_right_radial_min_norm_m: 0.05
 inside_right_press_travel_m: 0.045
 ```
+
+현재 데모 보정:
+
+```yaml
+outside_front_offset_z: 0.010
+inside_b1_front_offset_z: 0.010
+inside_b1_right_offset_z: 0.010
+```
+
+위 세 값은 실제 타점이 인식 위치보다 아래로 내려가는 오차를 보정하기 위해 목표점을 1cm 위로 올린다.
 
 의미:
 
