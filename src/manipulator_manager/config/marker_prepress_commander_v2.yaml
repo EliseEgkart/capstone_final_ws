@@ -48,7 +48,7 @@ marker_prepress_commander_v2:
     # camera_link follows the RealSense ROS camera convention. Tune axis/sign
     # on the robot before adding a real press-depth motion.
     outside_front_approach_frame: camera_link
-    outside_front_approach_axis: x
+    outside_front_approach_axis: "x"
     outside_front_approach_sign: -1.0
     outside_front_standoff_m: 0.035
     outside_front_offset_x: 0.0
@@ -56,7 +56,7 @@ marker_prepress_commander_v2:
     outside_front_offset_z: 0.0
 
     inside_front_approach_frame: camera_link
-    inside_front_approach_axis: x
+    inside_front_approach_axis: "x"
     inside_front_approach_sign: -1.0
     inside_front_standoff_m: 0.035
     inside_front_offset_x: 0.0
@@ -64,7 +64,7 @@ marker_prepress_commander_v2:
     inside_front_offset_z: 0.0
 
     inside_right_approach_frame: camera_link
-    inside_right_approach_axis: y
+    inside_right_approach_axis: "y"
     inside_right_approach_sign: -1.0
     inside_right_standoff_m: 0.035
     inside_right_offset_x: 0.0
