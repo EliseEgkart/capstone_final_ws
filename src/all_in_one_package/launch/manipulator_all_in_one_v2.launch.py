@@ -47,37 +47,35 @@ def generate_launch_description():
     default_arm_config = get_first_existing_config(
         manipulator_manager_share,
         [
-            'arm_pose_commander.yaml',
+            'arm_pose_commander_v2.yaml',
         ]
     )
 
-    default_button_config = get_first_existing_config(
+    default_prepress_config = get_first_existing_config(
         manipulator_manager_share,
         [
-            'marker_button_press_commander.yaml',
+            'marker_prepress_commander_v2.yaml',
         ]
     )
 
     default_task_config = get_first_existing_config(
         manipulator_manager_share,
         [
-            'manipulator_task_manager.yaml',
-            'task_manager.yaml',
-            'manipulator_task_system.yaml',
+            'manipulator_task_manager_v2.yaml',
         ]
     )
 
     # =========================================================
     # Launch arguments
     # =========================================================
-    button_plan_only = LaunchConfiguration('button_plan_only')
+    prepress_plan_only = LaunchConfiguration('prepress_plan_only')
     unload_wait_for_result = LaunchConfiguration('unload_wait_for_result')
     arm_config = LaunchConfiguration('arm_config')
-    button_config = LaunchConfiguration('button_config')
+    prepress_config = LaunchConfiguration('prepress_config')
     task_config = LaunchConfiguration('task_config')
 
-    declare_button_plan_only = DeclareLaunchArgument(
-        'button_plan_only',
+    declare_prepress_plan_only = DeclareLaunchArgument(
+        'prepress_plan_only',
         default_value='false',
         description='Forwarded only to manipulator_task_system_v2.launch.py'
     )
@@ -94,9 +92,9 @@ def generate_launch_description():
         description='Forwarded only to manipulator_task_system_v2.launch.py'
     )
 
-    declare_button_config = DeclareLaunchArgument(
-        'button_config',
-        default_value=default_button_config,
+    declare_prepress_config = DeclareLaunchArgument(
+        'prepress_config',
+        default_value=default_prepress_config,
         description='Forwarded only to manipulator_task_system_v2.launch.py'
     )
 
@@ -129,10 +127,10 @@ def generate_launch_description():
     task_system_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(task_system_launch_path),
         launch_arguments={
-            'button_plan_only': button_plan_only,
+            'prepress_plan_only': prepress_plan_only,
             'unload_wait_for_result': unload_wait_for_result,
             'arm_config': arm_config,
-            'button_config': button_config,
+            'prepress_config': prepress_config,
             'task_config': task_config,
         }.items()
     )
@@ -142,8 +140,8 @@ def generate_launch_description():
     # =========================================================
     # NOTE:
     # - This intentionally uses ExecuteProcess instead of IncludeLaunchDescription.
-    # - It prevents all parent launch arguments such as button_plan_only,
-    #   unload_wait_for_result, arm_config, button_config, and task_config
+    # - It prevents all parent launch arguments such as prepress_plan_only,
+    #   unload_wait_for_result, arm_config, prepress_config, and task_config
     #   from leaking into camera_perception_pkg/manipulator_perception.launch.py
     #   and then into realsense2_camera/rs_launch.py.
     camera_perception_process = ExecuteProcess(
@@ -175,10 +173,10 @@ def generate_launch_description():
     #   5 sec  : camera_perception_pkg / manipulator_perception.launch.py
     #   18 sec : amr_navigator / elevator_delivery_final_with_manipulator
     return LaunchDescription([
-        declare_button_plan_only,
+        declare_prepress_plan_only,
         declare_unload_wait_for_result,
         declare_arm_config,
-        declare_button_config,
+        declare_prepress_config,
         declare_task_config,
 
         LogInfo(msg='[all_in_one] Launching manipulator all-in-one system'),
