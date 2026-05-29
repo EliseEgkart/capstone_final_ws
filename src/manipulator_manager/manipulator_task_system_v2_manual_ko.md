@@ -713,11 +713,11 @@ HOME_DONE
 ```yaml
 publish_button_done_on_prepress_start: false
 complete_button_on_prepress_failure: true
-button_done_dedup_sec: 5.0
+button_done_dedup_sec: -1.0
 ```
 
 `complete_button_on_prepress_failure: true`이면 버튼 누르기 성공 여부와 관계없이 home 복귀 후 DONE을 발행한다.
-DONE 직후 상위 시스템이 같은 버튼 명령을 반복 송신 중이면, `button_done_dedup_sec` 동안 새 로봇팔 동작을 시작하지 않고 같은 DONE만 재발행한다.
+DONE 직후 상위 시스템이 같은 버튼 명령을 반복 송신 중이면, 새 로봇팔 동작을 시작하지 않고 같은 DONE만 재발행한다. `button_done_dedup_sec: -1.0`은 시간 제한 없이 같은 완료 명령을 latch한다는 뜻이다. 다른 버튼/작업 명령 또는 `RESET`이 들어오면 다음 작업은 정상적으로 받을 수 있다.
 
 실패:
 
