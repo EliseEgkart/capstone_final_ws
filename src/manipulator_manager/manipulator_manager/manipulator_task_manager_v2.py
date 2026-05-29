@@ -29,12 +29,9 @@ CMD_CANCEL = "CANCEL"
 CMD_STATUS = "STATUS"
 CMD_RESET = "RESET"
 
-RESULT_OUTSIDE_PREPRESS_DONE = "OUTSIDE_BTN_PREPRESS_DONE"
-RESULT_INSIDE_PREPRESS_DONE = "INSIDE_BTN_PREPRESS_DONE"
-RESULT_INSIDE_B1_FRONT_PREPRESS_DONE = "INSIDE_B1_BTN_FRONT_PREPRESS_DONE"
-RESULT_INSIDE_3F_FRONT_PREPRESS_DONE = "INSIDE_3F_BTN_FRONT_PREPRESS_DONE"
-RESULT_INSIDE_B1_RIGHT_PREPRESS_DONE = "INSIDE_B1_BTN_RIGHT_PREPRESS_DONE"
-RESULT_INSIDE_3F_RIGHT_PREPRESS_DONE = "INSIDE_3F_BTN_RIGHT_PREPRESS_DONE"
+RESULT_OUTSIDE_BTN_DONE = "OUTSIDE_BTN_DONE"
+RESULT_INSIDE_B1_BTN_DONE = "INSIDE_B1_BTN_DONE"
+RESULT_INSIDE_3F_BTN_DONE = "INSIDE_3F_BTN_DONE"
 RESULT_UNLOAD_DONE = "UNLOAD_DONE"
 RESULT_HOME_DONE = "HOME_DONE"
 RESULT_CANCELLED = "CANCELLED"
@@ -92,6 +89,7 @@ class ManipulatorTaskManagerV2(Node):
         self.declare_parameter("unload_assume_done_delay_sec", 5.0)
         self.declare_parameter("return_home_after_prepress", True)
         self.declare_parameter("return_home_after_unload", True)
+        self.declare_parameter("complete_button_on_prepress_failure", True)
         self.declare_parameter("marker_settle_sec", 3.0)
 
         self.declare_parameter("outside_align_timeout_sec", 12.0)
@@ -145,6 +143,9 @@ class ManipulatorTaskManagerV2(Node):
         )
         self.return_home_after_unload = bool(
             self.get_parameter("return_home_after_unload").value
+        )
+        self.complete_button_on_prepress_failure = bool(
+            self.get_parameter("complete_button_on_prepress_failure").value
         )
         self.marker_settle_sec = float(self.get_parameter("marker_settle_sec").value)
         self.outside_align_timeout_sec = float(
@@ -248,7 +249,7 @@ class ManipulatorTaskManagerV2(Node):
                 perception_target=self.perception_outside_down,
                 arm_scan=ARM_OUTSIDE_SCAN,
                 profile="outside_front",
-                done_result=RESULT_OUTSIDE_PREPRESS_DONE,
+                done_result=RESULT_OUTSIDE_BTN_DONE,
                 align_state="OUTSIDE_ALIGNING",
             )
             return
@@ -257,7 +258,7 @@ class ManipulatorTaskManagerV2(Node):
                 cmd,
                 self.perception_inside_b1,
                 "inside_front",
-                RESULT_INSIDE_PREPRESS_DONE,
+                RESULT_INSIDE_B1_BTN_DONE,
             )
             return
         if cmd == CMD_INSIDE_B1_BTN_FRONT:
@@ -265,7 +266,7 @@ class ManipulatorTaskManagerV2(Node):
                 cmd,
                 self.perception_inside_b1,
                 "inside_front",
-                RESULT_INSIDE_B1_FRONT_PREPRESS_DONE,
+                RESULT_INSIDE_B1_BTN_DONE,
             )
             return
         if cmd == CMD_INSIDE_3F_BTN_FRONT:
@@ -273,7 +274,7 @@ class ManipulatorTaskManagerV2(Node):
                 cmd,
                 self.perception_inside_3f,
                 "inside_front",
-                RESULT_INSIDE_3F_FRONT_PREPRESS_DONE,
+                RESULT_INSIDE_3F_BTN_DONE,
             )
             return
         if cmd == CMD_INSIDE_B1_BTN_RIGHT:
@@ -281,7 +282,7 @@ class ManipulatorTaskManagerV2(Node):
                 cmd,
                 self.perception_inside_b1,
                 "inside_right",
-                RESULT_INSIDE_B1_RIGHT_PREPRESS_DONE,
+                RESULT_INSIDE_B1_BTN_DONE,
             )
             return
         if cmd == CMD_INSIDE_3F_BTN_RIGHT:
@@ -289,7 +290,7 @@ class ManipulatorTaskManagerV2(Node):
                 cmd,
                 self.perception_inside_3f,
                 "inside_right",
-                RESULT_INSIDE_3F_RIGHT_PREPRESS_DONE,
+                RESULT_INSIDE_3F_BTN_DONE,
             )
             return
         if cmd == CMD_DESTINATION_UNLOAD:
@@ -386,16 +387,15 @@ class ManipulatorTaskManagerV2(Node):
             return
 
         if text.startswith("prepress_done") or text.startswith("press_done"):
-            done_result = self._active_done_result or "PREPRESS_DONE"
-            if self.return_home_after_prepress:
-                self._start_home("PREPRESS_HOMING", done_result)
-            else:
-                self._reset_to_idle()
-                self._publish_result(done_result)
+            self._finish_button_attempt(self._active_done_result or "BUTTON_DONE")
             return
 
         if self._is_failure(text) or text == "cancelled":
-            self._fail_task(f"PREPRESS_FAILED:{text}")
+            self._publish_error(f"PREPRESS_FAILED:{text}")
+            if self.complete_button_on_prepress_failure:
+                self._finish_button_attempt(self._active_done_result or "BUTTON_DONE")
+            else:
+                self._fail_task(f"PREPRESS_FAILED:{text}")
 
     def _mcu_result_cb(self, msg: String) -> None:
         text = msg.data.strip().upper()
@@ -421,6 +421,13 @@ class ManipulatorTaskManagerV2(Node):
         self._set_state("PREPRESSING")
         self._set_deadline(self.prepress_timeout_sec)
         self._publish_prepress_cmd(self._active_profile)
+
+    def _finish_button_attempt(self, done_result: str) -> None:
+        self._publish_result(done_result)
+        if self.return_home_after_prepress:
+            self._start_home("PREPRESS_HOMING")
+            return
+        self._reset_to_idle()
 
     def _start_destination_unload_task(self) -> None:
         if not self._accept_new_task(CMD_DESTINATION_UNLOAD):
@@ -469,6 +476,11 @@ class ManipulatorTaskManagerV2(Node):
 
     def _handle_timeout(self) -> None:
         state = self._state
+        if state == "PREPRESSING" and self.complete_button_on_prepress_failure:
+            self._publish_error("PREPRESSING_TIMEOUT")
+            self._publish_prepress_cmd(PREPRESS_CANCEL)
+            self._finish_button_attempt(self._active_done_result or "BUTTON_DONE")
+            return
         if state in (
             "OUTSIDE_ALIGNING",
             "INSIDE_ALIGNING",

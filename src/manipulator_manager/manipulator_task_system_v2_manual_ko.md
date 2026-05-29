@@ -191,8 +191,8 @@ OUTSIDE_BTN_FRONT
 -> outside_scan 자세
 -> marker settle
 -> prepress profile outside_front
--> OUTSIDE_BTN_PREPRESS_DONE
--> home 복귀
+-> OUTSIDE_BTN_DONE
+-> home 복귀는 내부적으로 계속 수행
 ```
 
 ### 내부 B1 전면 접근
@@ -204,7 +204,7 @@ ros2 topic pub --once /manipulator_task_cmd std_msgs/msg/String "{data: 'INSIDE_
 결과:
 
 ```text
-INSIDE_B1_BTN_FRONT_PREPRESS_DONE
+INSIDE_B1_BTN_DONE
 ```
 
 기존 호환 명령:
@@ -216,7 +216,7 @@ ros2 topic pub --once /manipulator_task_cmd std_msgs/msg/String "{data: 'INSIDE_
 결과:
 
 ```text
-INSIDE_BTN_PREPRESS_DONE
+INSIDE_B1_BTN_DONE
 ```
 
 ### 내부 3층 전면 접근
@@ -228,7 +228,7 @@ ros2 topic pub --once /manipulator_task_cmd std_msgs/msg/String "{data: 'INSIDE_
 결과:
 
 ```text
-INSIDE_3F_BTN_FRONT_PREPRESS_DONE
+INSIDE_3F_BTN_DONE
 ```
 
 ### 내부 B1 오른쪽 접근
@@ -240,7 +240,7 @@ ros2 topic pub --once /manipulator_task_cmd std_msgs/msg/String "{data: 'INSIDE_
 결과:
 
 ```text
-INSIDE_B1_BTN_RIGHT_PREPRESS_DONE
+INSIDE_B1_BTN_DONE
 ```
 
 ### 내부 3층 오른쪽 접근
@@ -252,7 +252,7 @@ ros2 topic pub --once /manipulator_task_cmd std_msgs/msg/String "{data: 'INSIDE_
 결과:
 
 ```text
-INSIDE_3F_BTN_RIGHT_PREPRESS_DONE
+INSIDE_3F_BTN_DONE
 ```
 
 ### 목적지 하역
@@ -548,15 +548,14 @@ pre-contact 위치
 성공:
 
 ```text
-OUTSIDE_BTN_PREPRESS_DONE
-INSIDE_BTN_PREPRESS_DONE
-INSIDE_B1_BTN_FRONT_PREPRESS_DONE
-INSIDE_3F_BTN_FRONT_PREPRESS_DONE
-INSIDE_B1_BTN_RIGHT_PREPRESS_DONE
-INSIDE_3F_BTN_RIGHT_PREPRESS_DONE
+OUTSIDE_BTN_DONE
+INSIDE_B1_BTN_DONE
+INSIDE_3F_BTN_DONE
 UNLOAD_DONE
 HOME_DONE
 ```
+
+데모 모드에서는 prepress/press가 실패해도 에러를 기록한 뒤 버튼 task는 위 DONE 문자열로 즉시 완료 처리한다. home 복귀는 내부적으로 계속 수행된다. 이 동작은 `complete_button_on_prepress_failure`로 제어한다.
 
 실패:
 
@@ -653,7 +652,6 @@ v2 marker_prepress_commander_v2:
   3초 안정화 이후 marker를 새로 수집
   marker 위치에서 link1 방사 방향 standoff를 적용한 pre-contact 위치로 이동
   enable_press가 true이면 저장된 같은 방사 벡터로 press/release 수행
-  결과: *_PREPRESS_DONE
+  Task Manager 결과: OUTSIDE_BTN_DONE / INSIDE_B1_BTN_DONE / INSIDE_3F_BTN_DONE
 ```
-
-v2에서 `*_PREPRESS_DONE`은 버튼을 눌렀다는 뜻이 아니다. 버튼 바로 앞 목표 위치에 도달했다는 뜻이다.
+marker_prepress_commander_v2의 내부 결과는 `prepress_done:*` 또는 `press_done:*`이지만, 외부 `/manipulator_task_result`는 데모 흐름을 위해 `*_BTN_DONE`으로 정규화된다.

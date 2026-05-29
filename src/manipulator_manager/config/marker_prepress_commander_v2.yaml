@@ -42,7 +42,7 @@ marker_prepress_commander_v2:
 
     # Keep false while tuning pre-contact alignment. When true, the node reuses
     # the stored radial vector from pre-contact and does not recollect markers.
-    enable_press: false
+    enable_press: True
     press_hold_sec: 0.2
     release_after_press: true
     press_max_velocity_scaling: 0.08
@@ -95,4 +95,4 @@ marker_prepress_commander_v2:
     inside_right_radial_frame: link1
     inside_right_radial_plane: "xy"
     inside_right_radial_min_norm_m: 0.05
-    inside_right_press_travel_m: 0.045
+    inside_right_press_travel_m: 0.055
