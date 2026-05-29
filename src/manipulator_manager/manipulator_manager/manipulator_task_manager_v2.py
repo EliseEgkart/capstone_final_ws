@@ -29,6 +29,15 @@ CMD_CANCEL = "CANCEL"
 CMD_STATUS = "STATUS"
 CMD_RESET = "RESET"
 
+BUTTON_TASK_COMMANDS = (
+    CMD_OUTSIDE_BTN_FRONT,
+    CMD_INSIDE_BTN_FRONT,
+    CMD_INSIDE_B1_BTN_FRONT,
+    CMD_INSIDE_3F_BTN_FRONT,
+    CMD_INSIDE_B1_BTN_RIGHT,
+    CMD_INSIDE_3F_BTN_RIGHT,
+)
+
 RESULT_OUTSIDE_BTN_DONE = "OUTSIDE_BTN_DONE"
 RESULT_INSIDE_B1_BTN_DONE = "INSIDE_B1_BTN_DONE"
 RESULT_INSIDE_3F_BTN_DONE = "INSIDE_3F_BTN_DONE"
@@ -91,6 +100,7 @@ class ManipulatorTaskManagerV2(Node):
         self.declare_parameter("return_home_after_unload", True)
         self.declare_parameter("complete_button_on_prepress_failure", True)
         self.declare_parameter("publish_button_done_on_prepress_start", False)
+        self.declare_parameter("button_done_dedup_sec", 5.0)
         self.declare_parameter("marker_settle_sec", 3.0)
 
         self.declare_parameter("outside_align_timeout_sec", 12.0)
@@ -151,6 +161,9 @@ class ManipulatorTaskManagerV2(Node):
         self.publish_button_done_on_prepress_start = bool(
             self.get_parameter("publish_button_done_on_prepress_start").value
         )
+        self.button_done_dedup_sec = float(
+            self.get_parameter("button_done_dedup_sec").value
+        )
         self.marker_settle_sec = float(self.get_parameter("marker_settle_sec").value)
         self.outside_align_timeout_sec = float(
             self.get_parameter("outside_align_timeout_sec").value
@@ -176,6 +189,9 @@ class ManipulatorTaskManagerV2(Node):
         self._delay_until = None
         self._pending_result_after_home: Optional[str] = None
         self._button_done_published = False
+        self._last_completed_button_task: Optional[str] = None
+        self._last_completed_button_result: Optional[str] = None
+        self._last_completed_button_time = None
 
         self.task_cmd_sub = self.create_subscription(
             String,
@@ -373,8 +389,10 @@ class ManipulatorTaskManagerV2(Node):
                     self._publish_result(RESULT_HOME_DONE)
                     return
                 if self._pending_result_after_home is not None:
+                    completed_task = self._active_task
                     result = self._pending_result_after_home
                     self._reset_to_idle()
+                    self._remember_completed_button_task(completed_task, result)
                     self._publish_result(result)
                     return
                 self._reset_to_idle()
@@ -435,6 +453,7 @@ class ManipulatorTaskManagerV2(Node):
             self._start_home("PREPRESS_HOMING", done_result)
             return
         self._publish_button_done_once(done_result)
+        self._remember_completed_button_task(self._active_task, done_result)
         self._reset_to_idle()
 
     def _publish_button_done_once(self, done_result: str) -> None:
@@ -442,6 +461,17 @@ class ManipulatorTaskManagerV2(Node):
             return
         self._publish_result(done_result)
         self._button_done_published = True
+
+    def _remember_completed_button_task(
+        self,
+        task: Optional[str],
+        result: Optional[str],
+    ) -> None:
+        if task not in BUTTON_TASK_COMMANDS or result is None:
+            return
+        self._last_completed_button_task = task
+        self._last_completed_button_result = result
+        self._last_completed_button_time = self.get_clock().now()
 
     def _start_destination_unload_task(self) -> None:
         if not self._accept_new_task(CMD_DESTINATION_UNLOAD):
@@ -538,6 +568,10 @@ class ManipulatorTaskManagerV2(Node):
         self._set_state("IDLE")
 
     def _accept_new_task(self, task_name: str) -> bool:
+        if self._is_recent_completed_button_task(task_name):
+            self._publish_result(self._last_completed_button_result or "BUTTON_DONE")
+            return False
+
         if self._state != "IDLE":
             if (
                 task_name == self._active_task
@@ -551,6 +585,18 @@ class ManipulatorTaskManagerV2(Node):
             )
             return False
         return True
+
+    def _is_recent_completed_button_task(self, task_name: str) -> bool:
+        if (
+            task_name != self._last_completed_button_task
+            or self._last_completed_button_result is None
+            or self._last_completed_button_time is None
+        ):
+            return False
+        age = (
+            self.get_clock().now() - self._last_completed_button_time
+        ).nanoseconds / 1e9
+        return age <= self.button_done_dedup_sec
 
     def _publish_perception_target(self, text: str) -> None:
         self._publish_string(self.perception_target_pub, text)
