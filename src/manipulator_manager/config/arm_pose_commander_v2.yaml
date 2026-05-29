@@ -1,0 +1,40 @@
+arm_pose_commander_v2:
+  ros__parameters:
+    flag_topic: /arm_pose_commander_v2/flag
+    done_topic: /arm_pose_commander_v2/done
+    move_action_name: /move_action
+
+    planning_group: arm
+    joint_names:
+      - joint1
+      - joint2
+      - joint3
+      - joint4
+
+    outside_scan_positions:
+      - -0.5744775939086038
+      - -0.8917605067945057
+      - 0.6494703239994609
+      - 0.1376985579567038
+
+    inside_scan_positions:
+      - -1.4902385994651557
+      - -0.4311009578952752
+      - 0.5612286785710505
+      - -0.18957269675268792
+
+    home_positions:
+      - 0.0
+      - -0.74718
+      - 0.84648
+      - -0.02443
+
+    joint_tolerance: 0.02
+    max_velocity_scaling: 0.2
+    max_acceleration_scaling: 0.2
+    allowed_planning_time_sec: 3.0
+    num_planning_attempts: 5
+    replan: true
+    replan_attempts: 1
+    replan_delay_sec: 1.0
+    wait_for_server_sec: 2.0

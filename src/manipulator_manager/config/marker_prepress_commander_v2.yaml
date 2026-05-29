@@ -1,0 +1,72 @@
+marker_prepress_commander_v2:
+  ros__parameters:
+    marker_topic: /object_3d_marker
+    cmd_topic: /marker_prepress_commander_v2/cmd
+    result_topic: /marker_prepress_commander_v2/result
+    state_topic: /marker_prepress_commander_v2/state
+    move_action_name: /move_action
+
+    planning_group: arm
+    ee_link: ee_link
+    goal_frame: link1
+
+    marker_timeout_sec: 3.0
+    marker_collect_sec: 0.5
+    preferred_marker_samples: 5
+    min_marker_samples: 1
+    marker_buffer_size: 20
+    allow_recent_marker: true
+    collect_tick_sec: 0.05
+
+    position_tolerance_m: 0.008
+    max_velocity_scaling: 0.15
+    max_acceleration_scaling: 0.15
+    allowed_planning_time_sec: 3.0
+    num_planning_attempts: 5
+
+    plan_only: false
+
+    use_orientation_constraint: true
+    goal_qx: 0.0
+    goal_qy: 0.0
+    goal_qz: 0.0
+    goal_qw: 1.0
+    ori_tol_x: 3.14
+    ori_tol_y: 3.14
+    ori_tol_z: 3.14
+
+    replan: true
+    replan_attempts: 1
+    replan_delay_sec: 1.0
+    wait_for_server_sec: 2.0
+
+    profile_names:
+      - outside_front
+      - inside_front
+      - inside_right
+
+    # camera_link follows the RealSense ROS camera convention. Tune axis/sign
+    # on the robot before adding a real press-depth motion.
+    outside_front_approach_frame: camera_link
+    outside_front_approach_axis: x
+    outside_front_approach_sign: -1.0
+    outside_front_standoff_m: 0.035
+    outside_front_offset_x: 0.0
+    outside_front_offset_y: 0.0
+    outside_front_offset_z: 0.0
+
+    inside_front_approach_frame: camera_link
+    inside_front_approach_axis: x
+    inside_front_approach_sign: -1.0
+    inside_front_standoff_m: 0.035
+    inside_front_offset_x: 0.0
+    inside_front_offset_y: 0.0
+    inside_front_offset_z: 0.0
+
+    inside_right_approach_frame: camera_link
+    inside_right_approach_axis: y
+    inside_right_approach_sign: -1.0
+    inside_right_standoff_m: 0.035
+    inside_right_offset_x: 0.0
+    inside_right_offset_y: 0.0
+    inside_right_offset_z: 0.0

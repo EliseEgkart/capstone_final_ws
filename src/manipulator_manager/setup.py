@@ -48,6 +48,9 @@ setup(
             'arm_pose_commander = manipulator_manager.arm_pose_commander:main',
             'marker_button_press_commander = manipulator_manager.marker_button_press_commander:main',
             'manipulator_task_manager = manipulator_manager.manipulator_task_manager:main',
+            'arm_pose_commander_v2 = manipulator_manager.arm_pose_commander_v2:main',
+            'marker_prepress_commander_v2 = manipulator_manager.marker_prepress_commander_v2:main',
+            'manipulator_task_manager_v2 = manipulator_manager.manipulator_task_manager_v2:main',
         ],
     },
 )
