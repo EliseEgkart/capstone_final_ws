@@ -1,33 +1,71 @@
 manipulator_task_manager_v3_student:
   ros__parameters:
+    # =========================================================
+    # Task-level topics
+    # =========================================================
     task_cmd_topic: /manipulator_task_cmd
-    done_topic: /manipulator_task_result
-    state_topic: /manipulator_task_state
-    error_topic: /manipulator_task_error
+    task_result_topic: /manipulator_task_result
+    task_state_topic: /manipulator_task_state
+    task_error_topic: /manipulator_task_error
 
+    # =========================================================
+    # Arm pose commander interface
+    # =========================================================
     arm_flag_topic: /arm_pose_commander_v2/flag
     arm_done_topic: /arm_pose_commander_v2/done
+    inside_scan_arm_flag: inside_scan
+    home_arm_flag: home
+    cancel_arm_flag: cancel
+    inside_scan_done_text: inside_scan_done
+    home_done_text: home_done
 
+    # =========================================================
+    # Marker prepress commander interface
+    # INSIDE_BTN_FRONT uses the same v2 logic:
+    #   inside_scan -> marker settle -> inside_b1_front -> home -> INSIDE_BTN_DONE
+    # =========================================================
     prepress_cmd_topic: /marker_prepress_commander_v2/cmd
     prepress_result_topic: /marker_prepress_commander_v2/result
     inside_prepress_profile: inside_b1_front
+    prepress_clear_cmd: clear
+    prepress_cancel_cmd: cancel
 
+    # =========================================================
+    # Perception target interface
+    # =========================================================
     perception_target_topic: /manipulator_perception/target_button
     perception_inside_b1: INSIDE_B1
 
-    mcu_result_topic: /mcu/result
-    mcu_unload_done: UNLOAD_DONE
-
+    # =========================================================
+    # ESP32 / hardware unload interface
+    # DESTINATION_UNLOAD flow:
+    #   cmd_pos_flag 3 -> cmd_pos_flag 2 -> UNLOAD_DONE
+    # =========================================================
     cmd_pos_flag_topic: /manipulator_hardware/cmd_pos_flag
     unload_prepare_cmd_pos_flag: 3
     unload_cmd_pos_flag: 2
+    unload_step_delay_sec: 0.5
+    unload_done_delay_sec: 0.2
+
+    # Optional string command path.
+    # Keep false when /manipulator_hardware/cmd_pos_flag already converts flags
+    # to the ESP32 serial command such as CMD_POS,...,3 and CMD_POS,...,2.
+    publish_esp32_cmd_string: false
+    esp32_cmd_topic: /mcu/cmd
+    esp32_unload_prepare_cmd: CMD_POS,0,0,3
+    esp32_unload_cmd: CMD_POS,0,0,2
+    esp32_cancel_cmd: CANCEL
+
+    # =========================================================
+    # Behavior / timeout parameters
+    # =========================================================
+    return_home_after_prepress: true
+    complete_button_on_prepress_failure: true
 
     marker_settle_sec: 3.0
     inside_align_timeout_sec: 12.0
     prepress_timeout_sec: 25.0
     home_timeout_sec: 12.0
-    unload_timeout_sec: 10.0
+    unload_timeout_sec: 25.0
     fsm_tick_sec: 0.05
-
-    return_home_after_inside_button: true
-    complete_inside_button_on_failure: true
+    auto_reset_after_failure: true
