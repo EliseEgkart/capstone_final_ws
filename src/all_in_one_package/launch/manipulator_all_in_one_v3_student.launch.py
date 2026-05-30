@@ -168,6 +168,7 @@ def generate_launch_description():
             'manipulator_task_cmd_topic': '/manipulator_task_cmd',
             'manipulator_task_result_topic': '/manipulator_task_result',
             'manipulator_task_state_topic': '/manipulator_task_state',
+            'final_approach_enable': False,
         }]
     )
 

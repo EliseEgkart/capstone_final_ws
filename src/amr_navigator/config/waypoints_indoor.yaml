@@ -4,13 +4,13 @@ maps:
 
     start:
       x: 0.106
-      y: 0.0254
+      y: 0.1254
       yaw: -0.0761
 
 
     elevator_btn_front:
-      x: 5.55
-      y: -1.29
+      x: 5.60
+      y: -1.20
       yaw: 0.0082
 
 
