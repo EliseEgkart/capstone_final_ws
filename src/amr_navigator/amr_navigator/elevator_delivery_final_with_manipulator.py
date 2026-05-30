@@ -26,6 +26,7 @@ Manipulator -> AMR:
 5) B1 destination 도착 시 /manipulator_task_cmd 로
    data: "DESTINATION_UNLOAD" 발행
    - 현재 요구사항에서는 destination_goal에 대한 완료 응답은 기다리지 않는다.
+6) UNLOAD_DONE을 메니퓰레이터가 /manipulator_task_cmd로 보내야함 그러면 자율주행 로봇을 알아서 원점으로 돌아가게 만들어야함.
 
 기존 유지 사항
 - RealSense 카메라 노드(realsense2_camera)는 이 파일에서 실행하지 않는다.

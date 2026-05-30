@@ -1,0 +1,33 @@
+manipulator_task_manager_v3_student:
+  ros__parameters:
+    task_cmd_topic: /manipulator_task_cmd
+    done_topic: /manipulator_task_cmd
+    state_topic: /manipulator_task_state_v3_student
+    error_topic: /manipulator_task_error_v3_student
+
+    arm_flag_topic: /arm_pose_commander_v2/flag
+    arm_done_topic: /arm_pose_commander_v2/done
+
+    prepress_cmd_topic: /marker_prepress_commander_v2/cmd
+    prepress_result_topic: /marker_prepress_commander_v2/result
+    inside_prepress_profile: inside_b1_front
+
+    perception_target_topic: /manipulator_perception/target_button
+    perception_inside_b1: INSIDE_B1
+
+    mcu_result_topic: /mcu/result
+    mcu_unload_done: UNLOAD_DONE
+
+    cmd_pos_flag_topic: /manipulator_hardware/cmd_pos_flag
+    unload_prepare_cmd_pos_flag: 3
+    unload_cmd_pos_flag: 2
+
+    marker_settle_sec: 3.0
+    inside_align_timeout_sec: 12.0
+    prepress_timeout_sec: 25.0
+    home_timeout_sec: 12.0
+    unload_timeout_sec: 10.0
+    fsm_tick_sec: 0.05
+
+    return_home_after_inside_button: true
+    complete_inside_button_on_failure: true

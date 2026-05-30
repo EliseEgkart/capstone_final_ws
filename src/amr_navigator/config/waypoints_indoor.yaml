@@ -1,0 +1,20 @@
+maps:
+  indoor:
+    map_yaml: "indoor_map_final.yaml"
+
+    start:
+      x: 0.106
+      y: 0.0254
+      yaw: -0.0761
+
+
+    elevator_btn_front:
+      x: 5.49
+      y: -1.29
+      yaw: 0.0082
+
+
+    unload_spot:
+      x: 4.68
+      y: -0.104
+      yaw: -3.1227

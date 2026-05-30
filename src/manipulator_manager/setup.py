@@ -51,6 +51,7 @@ setup(
             'arm_pose_commander_v2 = manipulator_manager.arm_pose_commander_v2:main',
             'marker_prepress_commander_v2 = manipulator_manager.marker_prepress_commander_v2:main',
             'manipulator_task_manager_v2 = manipulator_manager.manipulator_task_manager_v2:main',
+            'manipulator_task_manager_v3_student = manipulator_manager.manipulator_task_manager_v3_student:main',
         ],
     },
 )
