@@ -267,7 +267,7 @@ class ManipulatorTaskManagerV3Student(Node):
                 )
                 self._set_deadline(max(2.0, self.marker_settle_sec + 1.0))
             elif self._is_failure(text):
-                self._fail_task(f"INSIDE_ALIGN_FAILED:{text}")
+                self._complete_inside_button_demo(f"INSIDE_ALIGN_FAILED:{text}")
             return
 
         if self._state in ("BUTTON_HOMING", "HOME_ONLY"):
@@ -281,6 +281,12 @@ class ManipulatorTaskManagerV3Student(Node):
                 return
             if self._is_failure(text):
                 self._publish_error(f"HOME_FAILED:{text}")
+                if self._pending_done_after_home == RESULT_INSIDE_BTN_DONE:
+                    self._complete_inside_button_demo(
+                        f"HOME_FAILED:{text}",
+                        try_home=False,
+                    )
+                    return
                 self._reset_to_idle()
 
     def _prepress_result_cb(self, msg: String) -> None:
@@ -298,10 +304,7 @@ class ManipulatorTaskManagerV3Student(Node):
 
         if self._is_failure(text) or text == "cancelled":
             self._publish_error(f"BUTTON_PREPRESS_FAILED:{text}")
-            if self.complete_inside_button_on_failure:
-                self._finish_inside_button_attempt()
-                return
-            self._fail_task(f"BUTTON_PREPRESS_FAILED:{text}")
+            self._finish_inside_button_attempt()
 
     def _mcu_result_cb(self, msg: String) -> None:
         text = msg.data.strip().upper()
@@ -317,7 +320,7 @@ class ManipulatorTaskManagerV3Student(Node):
             self._publish_done(RESULT_UNLOAD_DONE)
             return
         if "FAIL" in text:
-            self._fail_task(f"UNLOAD_FAILED:{text}")
+            self._complete_unload_demo(f"UNLOAD_FAILED:{text}")
 
     def _finish_inside_button_attempt(self) -> None:
         if self.return_home_after_inside_button:
@@ -326,6 +329,29 @@ class ManipulatorTaskManagerV3Student(Node):
 
         self._reset_to_idle()
         self._publish_done(RESULT_INSIDE_BTN_DONE)
+
+    def _complete_inside_button_demo(
+        self,
+        reason: Optional[str] = None,
+        *,
+        try_home: bool = True,
+    ) -> None:
+        if reason is not None:
+            self._publish_error(reason)
+
+        if try_home and self.return_home_after_inside_button:
+            self._start_home("BUTTON_HOMING", RESULT_INSIDE_BTN_DONE)
+            return
+
+        self._reset_to_idle()
+        self._publish_done(RESULT_INSIDE_BTN_DONE)
+
+    def _complete_unload_demo(self, reason: Optional[str] = None) -> None:
+        if reason is not None:
+            self._publish_error(reason)
+
+        self._reset_to_idle()
+        self._publish_done(RESULT_UNLOAD_DONE)
 
     def _start_destination_unload_task(self) -> None:
         if not self._accept_new_task(CMD_DESTINATION_UNLOAD):
@@ -366,27 +392,24 @@ class ManipulatorTaskManagerV3Student(Node):
     def _handle_timeout(self) -> None:
         state = self._state
         if state == "INSIDE_ALIGNING":
-            self._fail_task("INSIDE_ALIGN_TIMEOUT")
+            self._complete_inside_button_demo("INSIDE_ALIGN_TIMEOUT")
             return
         if state == "MARKER_SETTLE":
-            self._fail_task("MARKER_SETTLE_TIMEOUT")
+            self._complete_inside_button_demo("MARKER_SETTLE_TIMEOUT")
             return
         if state == "BUTTON_PREPRESSING":
             self._publish_error("BUTTON_PREPRESS_TIMEOUT")
-            if self.complete_inside_button_on_failure:
-                self._publish_prepress_cmd(PREPRESS_CANCEL)
-                self._finish_inside_button_attempt()
-                return
-            self._fail_task("BUTTON_PREPRESS_TIMEOUT")
+            self._publish_prepress_cmd(PREPRESS_CANCEL)
+            self._finish_inside_button_attempt()
             return
         if state == "BUTTON_HOMING":
-            self._fail_task("BUTTON_HOMING_TIMEOUT")
+            self._complete_inside_button_demo("BUTTON_HOMING_TIMEOUT", try_home=False)
             return
         if state == "HOME_ONLY":
             self._fail_task("HOME_ONLY_TIMEOUT")
             return
         if state == "UNLOADING":
-            self._fail_task("UNLOAD_TIMEOUT")
+            self._complete_unload_demo("UNLOAD_TIMEOUT")
             return
         self._fail_task(f"UNKNOWN_TIMEOUT_STATE:{state}")
 
@@ -409,6 +432,14 @@ class ManipulatorTaskManagerV3Student(Node):
         self._publish_prepress_cmd(PREPRESS_CANCEL)
         self._set_state("ERROR")
         self._publish_error(reason)
+        if self._active_task == CMD_INSIDE_BTN_FRONT:
+            self._reset_to_idle()
+            self._publish_done(RESULT_INSIDE_BTN_DONE)
+            return
+        if self._active_task == CMD_DESTINATION_UNLOAD:
+            self._reset_to_idle()
+            self._publish_done(RESULT_UNLOAD_DONE)
+            return
         self._publish_done(f"FAILED:{reason}")
         self._reset_to_idle()
 
