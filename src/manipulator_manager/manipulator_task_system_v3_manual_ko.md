@@ -145,7 +145,7 @@ ros2 launch manipulator_manager manipulator_task_system_v3_student.launch.py \
   unload_wait_for_result:=true
 ```
 
-하드웨어 없이 하역 FSM만 빠르게 확인할 때만 다음 옵션을 사용한다.
+하드웨어 없이 시간 기반 fallback 완료 경로만 빠르게 확인할 때만 다음 옵션을 사용한다.
 
 ```bash
 ros2 launch manipulator_manager manipulator_task_system_v3_student.launch.py \
@@ -155,6 +155,7 @@ ros2 launch manipulator_manager manipulator_task_system_v3_student.launch.py \
 
 `unload_wait_for_result=false`는 실제 운용 기본값이 아니다.
 실제 ESP32 하역 완료 검증은 반드시 `true`로 한다.
+하드웨어 없이도 실제 운용 계약을 검증하려면 12장의 `/mcu/result` 수동 publish 테스트를 사용한다.
 
 ---
 
@@ -221,7 +222,8 @@ ros2 param get /manipulator_task_manager_v3_student mcu_unload_done
 ros2 param get /manipulator_task_manager_v3_student unload_timeout_sec
 ```
 
-정상 기대값:
+`ros2 param get`의 출력 문구는 ROS 2 배포판별로 조금 다를 수 있다.
+값 자체는 다음이어야 한다.
 
 ```text
 unload_wait_for_result: true
@@ -463,6 +465,9 @@ ros2 launch manipulator_manager manipulator_task_system_v3_student.launch.py \
 ```
 
 2번 터미널: 상태 모니터링
+
+아래 echo 명령은 각각 계속 실행되는 명령이다.
+동시에 보려면 별도 터미널에서 하나씩 실행한다.
 
 ```bash
 ros2 topic echo /manipulator_task_state
