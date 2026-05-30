@@ -163,7 +163,12 @@ def generate_launch_description():
         package='amr_navigator',
         executable='indoor_students_manager',
         name='indoor_students_manager',
-        output='screen'
+        output='screen',
+        parameters=[{
+            'manipulator_task_cmd_topic': '/manipulator_task_cmd',
+            'manipulator_task_result_topic': '/manipulator_task_cmd',
+            'manipulator_task_state_topic': '/manipulator_task_state_v3_student',
+        }]
     )
 
     # =========================================================
