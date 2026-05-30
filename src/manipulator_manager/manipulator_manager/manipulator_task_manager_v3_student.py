@@ -85,6 +85,7 @@ class ManipulatorTaskManagerV3Student(Node):
         )
         self.declare_parameter("unload_prepare_cmd_pos_flag", 3)
         self.declare_parameter("unload_cmd_pos_flag", 2)
+        self.declare_parameter("unload_wait_for_result", True)
 
         self.declare_parameter("marker_settle_sec", 3.0)
         self.declare_parameter("inside_align_timeout_sec", 12.0)
