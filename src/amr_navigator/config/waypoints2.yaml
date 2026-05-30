@@ -22,7 +22,7 @@ maps:
 
     elevator_btn_front:
       x: 43.1000
-      y: -3.4300
+      y: -3.4200
       yaw: 0.0530
       # x: 43.3255
       # y: -3.7549
@@ -40,7 +40,7 @@ maps:
 
     elevator_btn_inside:
       x: 45.4
-      y: -3.35
+      y: -3.34
       yaw: 0.0290
 
     elevator_inside_for_exit:

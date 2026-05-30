@@ -96,7 +96,7 @@ def generate_launch_description():
                 # ---------------------------------------------------------
                 'rgb_camera.enable_auto_exposure': False,
                 'rgb_camera.exposure': 380,
-                'rgb_camera.gain': 20,
+                'rgb_camera.gain': 40,
                 'rgb_camera.enable_auto_white_balance': True,
                 #'rgb_camera.white_balance': 5680,
                 
