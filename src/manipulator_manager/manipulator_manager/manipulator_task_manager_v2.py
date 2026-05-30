@@ -16,7 +16,7 @@ from typing import Optional
 import rclpy
 from rclpy.duration import Duration
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import Int32, String
 
 
 CMD_OUTSIDE_BTN_FRONT = "OUTSIDE_BTN_FRONT"
@@ -96,6 +96,12 @@ class ManipulatorTaskManagerV2(Node):
         self.declare_parameter("mcu_unload_done", "UNLOAD_DONE")
         self.declare_parameter("mcu_unload_failed", "UNLOAD_FAILED")
         self.declare_parameter("mcu_cancel_cmd", "CANCEL")
+        self.declare_parameter(
+            "cmd_pos_flag_topic",
+            "/manipulator_hardware/cmd_pos_flag",
+        )
+        self.declare_parameter("unload_cmd_pos_flag", 2)
+        self.declare_parameter("publish_legacy_mcu_unload_cmd", False)
 
         self.declare_parameter("unload_wait_for_result", True)
         self.declare_parameter("unload_assume_done_delay_sec", 5.0)
@@ -147,6 +153,11 @@ class ManipulatorTaskManagerV2(Node):
         self.mcu_unload_done = str(self.get_parameter("mcu_unload_done").value)
         self.mcu_unload_failed = str(self.get_parameter("mcu_unload_failed").value)
         self.mcu_cancel_cmd = str(self.get_parameter("mcu_cancel_cmd").value)
+        self.cmd_pos_flag_topic = str(self.get_parameter("cmd_pos_flag_topic").value)
+        self.unload_cmd_pos_flag = int(self.get_parameter("unload_cmd_pos_flag").value)
+        self.publish_legacy_mcu_unload_cmd = bool(
+            self.get_parameter("publish_legacy_mcu_unload_cmd").value
+        )
 
         self.unload_wait_for_result = bool(
             self.get_parameter("unload_wait_for_result").value
@@ -241,6 +252,11 @@ class ManipulatorTaskManagerV2(Node):
             10,
         )
         self.mcu_cmd_pub = self.create_publisher(String, self.mcu_cmd_topic, 10)
+        self.cmd_pos_flag_pub = self.create_publisher(
+            Int32,
+            self.cmd_pos_flag_topic,
+            10,
+        )
 
         self.fsm_timer = self.create_timer(self.fsm_tick_sec, self._fsm_tick)
 
@@ -253,6 +269,9 @@ class ManipulatorTaskManagerV2(Node):
         self.get_logger().info(f"[task_manager_v2] arm_done_topic={self.arm_done_topic}")
         self.get_logger().info(
             f"[task_manager_v2] prepress_cmd_topic={self.prepress_cmd_topic}"
+        )
+        self.get_logger().info(
+            f"[task_manager_v2] cmd_pos_flag_topic={self.cmd_pos_flag_topic}"
         )
         self.get_logger().info(
             "[task_manager_v2] button result policy: execute once, home, then DONE"
@@ -511,7 +530,9 @@ class ManipulatorTaskManagerV2(Node):
         self._active_task = CMD_DESTINATION_UNLOAD
         self._set_state("UNLOADING")
         self._set_deadline(self.unload_timeout_sec)
-        self._publish_mcu_cmd(self.mcu_unload_cmd)
+        self._publish_cmd_pos_flag(self.unload_cmd_pos_flag)
+        if self.publish_legacy_mcu_unload_cmd:
+            self._publish_mcu_cmd(self.mcu_unload_cmd)
         if not self.unload_wait_for_result:
             self._delay_until = self.get_clock().now() + Duration(
                 seconds=self.unload_assume_done_delay_sec
@@ -698,6 +719,12 @@ class ManipulatorTaskManagerV2(Node):
     def _publish_mcu_cmd(self, text: str) -> None:
         self._publish_string(self.mcu_cmd_pub, text)
         self.get_logger().info(f"[task_manager_v2] mcu_cmd='{text}'")
+
+    def _publish_cmd_pos_flag(self, flag: int) -> None:
+        msg = Int32()
+        msg.data = flag
+        self.cmd_pos_flag_pub.publish(msg)
+        self.get_logger().info(f"[task_manager_v2] cmd_pos_flag={flag}")
 
     def _publish_result(self, text: str) -> None:
         self._publish_string(self.task_result_pub, text)

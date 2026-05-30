@@ -22,6 +22,9 @@ manipulator_task_manager_v2:
     mcu_unload_done: UNLOAD_DONE
     mcu_unload_failed: UNLOAD_FAILED
     mcu_cancel_cmd: CANCEL
+    cmd_pos_flag_topic: /manipulator_hardware/cmd_pos_flag
+    unload_cmd_pos_flag: 2
+    publish_legacy_mcu_unload_cmd: false
 
     unload_wait_for_result: true
     unload_assume_done_delay_sec: 5.0

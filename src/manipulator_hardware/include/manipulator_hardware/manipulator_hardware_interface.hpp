@@ -10,8 +10,11 @@
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 
+#include "rclcpp/executors/single_threaded_executor.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/state.hpp"
+#include "std_msgs/msg/int32.hpp"
+#include "std_msgs/msg/string.hpp"
 
 namespace manipulator_hardware
 {
@@ -61,16 +64,31 @@ private:
   int baud_rate_;
   int timeout_ms_;
   std::string control_mode_;
+  std::string cmd_pos_flag_topic_;
+  std::string mcu_result_topic_;
+  std::string mcu_unload_done_;
+  int default_cmd_pos_flag_{1};
+  int next_cmd_pos_flag_{1};
+  int unload_cmd_pos_flag_{2};
+  bool force_next_write_{false};
 
   int serial_fd_{-1};
   uint32_t sequence_{0};
   std::string rx_buffer_;
+  rclcpp::Node::SharedPtr aux_node_;
+  std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> aux_executor_;
+  rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr cmd_pos_flag_sub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mcu_result_pub_;
 
   bool openSerialPort();
   void closeSerialPort();
 
   bool writeLine(const std::string & line);
   bool readLine(std::string & line);
+  void setupRosInterfaces();
+  void spinRosCallbacks();
+  void handleCmdPosFlag(const std_msgs::msg::Int32::SharedPtr msg);
+  void publishMcuResult(const std::string & result);
 
   double radToDeg(double rad) const;
 };

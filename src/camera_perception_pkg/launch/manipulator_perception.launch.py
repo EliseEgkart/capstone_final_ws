@@ -51,7 +51,7 @@ def generate_launch_description():
     )
 
     # =========================================================
-    # RealSense D435 node - Jetson NEON direct mode
+    # RealSense D435 node - Jetson NEON direct mbest_finalode
     # =========================================================
     # IMPORTANT:
     # - This launch does not use rs_launch.py.
@@ -89,6 +89,17 @@ def generate_launch_description():
                 'depth_module.depth_profile': '640x480x15',
                 'rgb_camera.color_profile': '640x480x15',
                 'rgb_camera.power_line_frequency': 2,
+
+                # ---------------------------------------------------------
+                # RGB manual exposure / white balance
+                # Same values previously used through rs_launch.py
+                # ---------------------------------------------------------
+                'rgb_camera.enable_auto_exposure': False,
+                'rgb_camera.exposure': 380,
+                'rgb_camera.gain': 20,
+                'rgb_camera.enable_auto_white_balance': True,
+                #'rgb_camera.white_balance': 5680,
+                
 
                 # D435 may still open infra streams internally through the
                 # depth module. Keep them lighter than the default 848x480x30.
@@ -216,21 +227,21 @@ def generate_launch_description():
         ),
 
         TimerAction(
-            period=18.0,
+            period=12.0,
             actions=[
                 object_distance_node
             ]
         ),
 
         TimerAction(
-            period=24.0,
+            period=18.0,
             actions=[
                 yolov8_node
             ]
         ),
 
         TimerAction(
-            period=34.0,
+            period=23.0,
             actions=[
                 yolov8_debug_node
             ]

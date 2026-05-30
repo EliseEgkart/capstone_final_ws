@@ -36,6 +36,7 @@ rclcpp::Time g_last_tx_time;
 rclcpp::Time g_last_write_time;
 bool g_last_tx_time_valid = false;
 bool g_last_write_time_valid = false;
+int g_pending_cmd_pos_flag = 1;
 
 void resetSerialAckState()
 {
@@ -46,6 +47,7 @@ void resetSerialAckState()
   g_pending_commands.clear();
   g_last_tx_time_valid = false;
   g_last_write_time_valid = false;
+  g_pending_cmd_pos_flag = 1;
 }
 
 speed_t getBaudRate(int baud_rate)
@@ -156,6 +158,28 @@ hardware_interface::CallbackReturn ManipulatorHardwareInterface::on_init(
   control_mode_ = info_.hardware_parameters.count("control_mode")
     ? info_.hardware_parameters.at("control_mode")
     : "open_loop";
+
+  cmd_pos_flag_topic_ = info_.hardware_parameters.count("cmd_pos_flag_topic")
+    ? info_.hardware_parameters.at("cmd_pos_flag_topic")
+    : "/manipulator_hardware/cmd_pos_flag";
+
+  mcu_result_topic_ = info_.hardware_parameters.count("mcu_result_topic")
+    ? info_.hardware_parameters.at("mcu_result_topic")
+    : "/mcu/result";
+
+  mcu_unload_done_ = info_.hardware_parameters.count("mcu_unload_done")
+    ? info_.hardware_parameters.at("mcu_unload_done")
+    : "UNLOAD_DONE";
+
+  default_cmd_pos_flag_ = info_.hardware_parameters.count("default_cmd_pos_flag")
+    ? std::stoi(info_.hardware_parameters.at("default_cmd_pos_flag"))
+    : 1;
+
+  unload_cmd_pos_flag_ = info_.hardware_parameters.count("unload_cmd_pos_flag")
+    ? std::stoi(info_.hardware_parameters.at("unload_cmd_pos_flag"))
+    : 2;
+
+  next_cmd_pos_flag_ = default_cmd_pos_flag_;
 
   RCLCPP_INFO(
     rclcpp::get_logger("ManipulatorHardwareInterface"),
@@ -362,12 +386,88 @@ double ManipulatorHardwareInterface::radToDeg(double rad) const
   return rad * 180.0 / 3.14159265358979323846;
 }
 
+void ManipulatorHardwareInterface::setupRosInterfaces()
+{
+  if (aux_node_)
+  {
+    return;
+  }
+
+  aux_node_ = std::make_shared<rclcpp::Node>("manipulator_hardware_interface_aux");
+  aux_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+  aux_executor_->add_node(aux_node_);
+
+  cmd_pos_flag_sub_ = aux_node_->create_subscription<std_msgs::msg::Int32>(
+    cmd_pos_flag_topic_,
+    10,
+    [this](std_msgs::msg::Int32::SharedPtr msg) {
+      handleCmdPosFlag(msg);
+    });
+
+  mcu_result_pub_ = aux_node_->create_publisher<std_msgs::msg::String>(
+    mcu_result_topic_,
+    10);
+
+  RCLCPP_INFO(
+    rclcpp::get_logger("ManipulatorHardwareInterface"),
+    "ROS bridge ready: cmd_pos_flag_topic=%s, mcu_result_topic=%s",
+    cmd_pos_flag_topic_.c_str(),
+    mcu_result_topic_.c_str());
+}
+
+void ManipulatorHardwareInterface::spinRosCallbacks()
+{
+  if (aux_executor_)
+  {
+    aux_executor_->spin_some();
+  }
+}
+
+void ManipulatorHardwareInterface::handleCmdPosFlag(
+  const std_msgs::msg::Int32::SharedPtr msg)
+{
+  if (!msg || msg->data < 1)
+  {
+    RCLCPP_WARN(
+      rclcpp::get_logger("ManipulatorHardwareInterface"),
+      "Ignoring invalid CMD_POS flag request.");
+    return;
+  }
+
+  next_cmd_pos_flag_ = msg->data;
+  force_next_write_ = true;
+
+  RCLCPP_INFO(
+    rclcpp::get_logger("ManipulatorHardwareInterface"),
+    "Next CMD_POS will use flag=%d",
+    next_cmd_pos_flag_);
+}
+
+void ManipulatorHardwareInterface::publishMcuResult(const std::string & result)
+{
+  if (!mcu_result_pub_)
+  {
+    return;
+  }
+
+  std_msgs::msg::String msg;
+  msg.data = result;
+  mcu_result_pub_->publish(msg);
+
+  RCLCPP_INFO(
+    rclcpp::get_logger("ManipulatorHardwareInterface"),
+    "Published MCU result: %s",
+    result.c_str());
+}
+
 hardware_interface::CallbackReturn ManipulatorHardwareInterface::on_configure(
   const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(
     rclcpp::get_logger("ManipulatorHardwareInterface"),
     "Configuring manipulator hardware interface.");
+
+  setupRosInterfaces();
 
   if (!openSerialPort())
   {
@@ -426,6 +526,14 @@ hardware_interface::CallbackReturn ManipulatorHardwareInterface::on_deactivate(
   writeLine("STOP\r\n");
   closeSerialPort();
   resetSerialAckState();
+  if (aux_executor_ && aux_node_)
+  {
+    aux_executor_->remove_node(aux_node_);
+  }
+  cmd_pos_flag_sub_.reset();
+  mcu_result_pub_.reset();
+  aux_executor_.reset();
+  aux_node_.reset();
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -434,6 +542,8 @@ hardware_interface::return_type ManipulatorHardwareInterface::read(
   const rclcpp::Time &,
   const rclcpp::Duration & period)
 {
+  spinRosCallbacks();
+
   std::string line;
 
   while (readLine(line))
@@ -452,6 +562,8 @@ hardware_interface::return_type ManipulatorHardwareInterface::read(
 
         if (g_waiting_ack && ack_seq == g_pending_seq)
         {
+          const int acked_cmd_pos_flag = g_pending_cmd_pos_flag;
+
           if (g_pending_commands.size() == last_sent_commands_.size())
           {
             last_sent_commands_ = g_pending_commands;
@@ -461,12 +573,18 @@ hardware_interface::return_type ManipulatorHardwareInterface::read(
           g_retry_count = 0;
           g_pending_packet.clear();
           g_pending_commands.clear();
+          g_pending_cmd_pos_flag = default_cmd_pos_flag_;
           g_last_tx_time_valid = false;
 
           RCLCPP_INFO(
             rclcpp::get_logger("ManipulatorHardwareInterface"),
             "ACK matched. seq=%u",
             ack_seq);
+
+          if (acked_cmd_pos_flag == unload_cmd_pos_flag_)
+          {
+            publishMcuResult(mcu_unload_done_);
+          }
         }
         else
         {
@@ -546,6 +664,8 @@ hardware_interface::return_type ManipulatorHardwareInterface::write(
   const rclcpp::Time & time,
   const rclcpp::Duration &)
 {
+  spinRosCallbacks();
+
   if (hw_commands_.size() < 4)
   {
     return hardware_interface::return_type::ERROR;
@@ -574,6 +694,7 @@ hardware_interface::return_type ManipulatorHardwareInterface::write(
       g_retry_count = 0;
       g_pending_packet.clear();
       g_pending_commands.clear();
+      g_pending_cmd_pos_flag = default_cmd_pos_flag_;
       g_last_tx_time_valid = false;
 
       return hardware_interface::return_type::ERROR;
@@ -608,7 +729,7 @@ hardware_interface::return_type ManipulatorHardwareInterface::write(
     }
   }
 
-  bool changed = false;
+  bool changed = force_next_write_;
 
   for (size_t i = 0; i < hw_commands_.size(); ++i)
   {
@@ -631,6 +752,9 @@ hardware_interface::return_type ManipulatorHardwareInterface::write(
   const double j4_deg = radToDeg(hw_commands_[3]);
 
   const uint32_t seq = sequence_++;
+  const int cmd_pos_flag = next_cmd_pos_flag_;
+  next_cmd_pos_flag_ = default_cmd_pos_flag_;
+  force_next_write_ = false;
 
   std::ostringstream ss;
   ss << std::fixed << std::setprecision(3);
@@ -640,7 +764,7 @@ hardware_interface::return_type ManipulatorHardwareInterface::write(
     << j2_deg << ","
     << j3_deg << ","
     << j4_deg << ","
-    << 1 << "\r\n";
+    << cmd_pos_flag << "\r\n";
 
   const std::string packet = ss.str();
 
@@ -657,6 +781,7 @@ hardware_interface::return_type ManipulatorHardwareInterface::write(
   g_pending_seq = seq;
   g_pending_packet = packet;
   g_pending_commands = hw_commands_;
+  g_pending_cmd_pos_flag = cmd_pos_flag;
   g_waiting_ack = true;
   g_retry_count = 0;
   g_last_tx_time = time;

@@ -262,6 +262,22 @@ INSIDE_3F_BTN_DONE
 ros2 topic pub --once /manipulator_task_cmd std_msgs/msg/String "{data: 'DESTINATION_UNLOAD'}"
 ```
 
+v2의 목적지 하역은 ESP32로 내려가는 `CMD_POS` 패킷의 마지막 필드를 `2`로 바꿔서 수행한다.
+
+흐름:
+
+```text
+/manipulator_task_cmd: DESTINATION_UNLOAD
+-> /manipulator_hardware/cmd_pos_flag: 2
+-> ESP32 serial: CMD_POS,<seq>,<joint1_deg>,<joint2_deg>,<joint3_deg>,<joint4_deg>,2\r\n
+-> ESP32 ACK,<seq>
+-> /mcu/result: UNLOAD_DONE
+-> arm home
+-> /manipulator_task_result: UNLOAD_DONE
+```
+
+평상시 버튼/홈 동작은 기존과 같이 마지막 필드 `1`을 사용한다.
+
 MCU 응답 없이 테스트할 때는 launch에 다음 옵션을 둔다.
 
 ```bash
