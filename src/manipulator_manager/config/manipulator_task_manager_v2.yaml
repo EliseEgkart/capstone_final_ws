@@ -23,6 +23,7 @@ manipulator_task_manager_v2:
     mcu_unload_failed: UNLOAD_FAILED
     mcu_cancel_cmd: CANCEL
     cmd_pos_flag_topic: /manipulator_hardware/cmd_pos_flag
+    unload_prepare_cmd_pos_flag: 3
     unload_cmd_pos_flag: 2
     publish_legacy_mcu_unload_cmd: false
 

@@ -1,5 +1,6 @@
 #include "manipulator_hardware/manipulator_hardware_interface.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <sstream>
@@ -37,6 +38,7 @@ rclcpp::Time g_last_write_time;
 bool g_last_tx_time_valid = false;
 bool g_last_write_time_valid = false;
 int g_pending_cmd_pos_flag = 1;
+std::vector<uint32_t> g_fire_and_forget_ack_seqs;
 
 void resetSerialAckState()
 {
@@ -48,6 +50,23 @@ void resetSerialAckState()
   g_last_tx_time_valid = false;
   g_last_write_time_valid = false;
   g_pending_cmd_pos_flag = 1;
+  g_fire_and_forget_ack_seqs.clear();
+}
+
+bool consumeFireAndForgetAck(uint32_t ack_seq)
+{
+  const auto it = std::find(
+    g_fire_and_forget_ack_seqs.begin(),
+    g_fire_and_forget_ack_seqs.end(),
+    ack_seq);
+
+  if (it == g_fire_and_forget_ack_seqs.end())
+  {
+    return false;
+  }
+
+  g_fire_and_forget_ack_seqs.erase(it);
+  return true;
 }
 
 speed_t getBaudRate(int baud_rate)
@@ -179,7 +198,7 @@ hardware_interface::CallbackReturn ManipulatorHardwareInterface::on_init(
     ? std::stoi(info_.hardware_parameters.at("unload_cmd_pos_flag"))
     : 2;
 
-  next_cmd_pos_flag_ = default_cmd_pos_flag_;
+  pending_cmd_pos_flags_.clear();
 
   RCLCPP_INFO(
     rclcpp::get_logger("ManipulatorHardwareInterface"),
@@ -434,13 +453,13 @@ void ManipulatorHardwareInterface::handleCmdPosFlag(
     return;
   }
 
-  next_cmd_pos_flag_ = msg->data;
+  pending_cmd_pos_flags_.push_back(msg->data);
   force_next_write_ = true;
 
   RCLCPP_INFO(
     rclcpp::get_logger("ManipulatorHardwareInterface"),
-    "Next CMD_POS will use flag=%d",
-    next_cmd_pos_flag_);
+    "Queued CMD_POS flag=%d",
+    msg->data);
 }
 
 void ManipulatorHardwareInterface::publishMcuResult(const std::string & result)
@@ -586,6 +605,13 @@ hardware_interface::return_type ManipulatorHardwareInterface::read(
             publishMcuResult(mcu_unload_done_);
           }
         }
+        else if (consumeFireAndForgetAck(ack_seq))
+        {
+          RCLCPP_INFO(
+            rclcpp::get_logger("ManipulatorHardwareInterface"),
+            "ACK matched fire-and-forget seq=%u",
+            ack_seq);
+        }
         else
         {
           RCLCPP_WARN(
@@ -729,7 +755,7 @@ hardware_interface::return_type ManipulatorHardwareInterface::write(
     }
   }
 
-  bool changed = force_next_write_;
+  bool changed = force_next_write_ || !pending_cmd_pos_flags_.empty();
 
   for (size_t i = 0; i < hw_commands_.size(); ++i)
   {
@@ -752,9 +778,13 @@ hardware_interface::return_type ManipulatorHardwareInterface::write(
   const double j4_deg = radToDeg(hw_commands_[3]);
 
   const uint32_t seq = sequence_++;
-  const int cmd_pos_flag = next_cmd_pos_flag_;
-  next_cmd_pos_flag_ = default_cmd_pos_flag_;
-  force_next_write_ = false;
+  int cmd_pos_flag = default_cmd_pos_flag_;
+  if (!pending_cmd_pos_flags_.empty())
+  {
+    cmd_pos_flag = pending_cmd_pos_flags_.front();
+    pending_cmd_pos_flags_.pop_front();
+  }
+  force_next_write_ = !pending_cmd_pos_flags_.empty();
 
   std::ostringstream ss;
   ss << std::fixed << std::setprecision(3);
@@ -778,12 +808,16 @@ hardware_interface::return_type ManipulatorHardwareInterface::write(
     return hardware_interface::return_type::ERROR;
   }
 
-  if (cmd_pos_flag == unload_cmd_pos_flag_)
+  if (cmd_pos_flag != default_cmd_pos_flag_)
   {
     last_sent_commands_ = hw_commands_;
+    g_fire_and_forget_ack_seqs.push_back(seq);
     g_last_write_time = time;
     g_last_write_time_valid = true;
-    publishMcuResult(mcu_unload_done_);
+    if (cmd_pos_flag == unload_cmd_pos_flag_)
+    {
+      publishMcuResult(mcu_unload_done_);
+    }
     return hardware_interface::return_type::OK;
   }
 

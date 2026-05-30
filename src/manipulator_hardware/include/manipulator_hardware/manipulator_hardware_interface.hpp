@@ -2,6 +2,7 @@
 #define MANIPULATOR_HARDWARE__MANIPULATOR_HARDWARE_INTERFACE_HPP_
 
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -68,9 +69,9 @@ private:
   std::string mcu_result_topic_;
   std::string mcu_unload_done_;
   int default_cmd_pos_flag_{1};
-  int next_cmd_pos_flag_{1};
   int unload_cmd_pos_flag_{2};
   bool force_next_write_{false};
+  std::deque<int> pending_cmd_pos_flags_;
 
   int serial_fd_{-1};
   uint32_t sequence_{0};

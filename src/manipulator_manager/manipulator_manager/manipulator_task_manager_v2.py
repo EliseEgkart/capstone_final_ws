@@ -100,6 +100,7 @@ class ManipulatorTaskManagerV2(Node):
             "cmd_pos_flag_topic",
             "/manipulator_hardware/cmd_pos_flag",
         )
+        self.declare_parameter("unload_prepare_cmd_pos_flag", 3)
         self.declare_parameter("unload_cmd_pos_flag", 2)
         self.declare_parameter("publish_legacy_mcu_unload_cmd", False)
 
@@ -154,6 +155,9 @@ class ManipulatorTaskManagerV2(Node):
         self.mcu_unload_failed = str(self.get_parameter("mcu_unload_failed").value)
         self.mcu_cancel_cmd = str(self.get_parameter("mcu_cancel_cmd").value)
         self.cmd_pos_flag_topic = str(self.get_parameter("cmd_pos_flag_topic").value)
+        self.unload_prepare_cmd_pos_flag = int(
+            self.get_parameter("unload_prepare_cmd_pos_flag").value
+        )
         self.unload_cmd_pos_flag = int(self.get_parameter("unload_cmd_pos_flag").value)
         self.publish_legacy_mcu_unload_cmd = bool(
             self.get_parameter("publish_legacy_mcu_unload_cmd").value
@@ -530,6 +534,7 @@ class ManipulatorTaskManagerV2(Node):
         self._active_task = CMD_DESTINATION_UNLOAD
         self._set_state("UNLOADING")
         self._set_deadline(self.unload_timeout_sec)
+        self._publish_cmd_pos_flag(self.unload_prepare_cmd_pos_flag)
         self._publish_cmd_pos_flag(self.unload_cmd_pos_flag)
         if self.publish_legacy_mcu_unload_cmd:
             self._publish_mcu_cmd(self.mcu_unload_cmd)
