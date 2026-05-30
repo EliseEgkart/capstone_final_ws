@@ -1001,14 +1001,14 @@ class IndoorStudentsManager(Node):
 
     def expected_active_states_for_task(self, task_cmd: str) -> set:
         cmd = str(task_cmd).strip().upper()
-        if cmd == self.inside_button_task_cmd.upper():
+        if cmd == self.inside_button_task_cmd:
             return {
                 "INSIDE_ALIGNING",
                 "INSIDE_MARKER_SETTLE",
                 "BUTTON_PREPRESSING",
                 "BUTTON_HOMING",
             }
-        if cmd == self.destination_task_cmd.upper():
+        if cmd == self.destination_task_cmd:
             return {
                 "UNLOAD_PREPARE",
                 "UNLOAD_EXECUTE",
