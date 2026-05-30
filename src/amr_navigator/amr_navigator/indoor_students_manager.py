@@ -217,6 +217,7 @@ class IndoorStudentsManager(Node):
         self.declare_parameter("manipulator_cmd_publish_count", 10)
         self.declare_parameter("manipulator_cmd_publish_interval_sec", 0.2)
         self.declare_parameter("manipulator_cmd_republish_interval_sec", 1.0)
+        self.declare_parameter("require_manipulator_active_state_before_result", True)
         # 0.0이면 result를 받을 때까지 무한 대기
         self.declare_parameter("manipulator_task_timeout_sec", 0.0)
 
@@ -307,6 +308,9 @@ class IndoorStudentsManager(Node):
         self.manipulator_cmd_publish_count = max(1, int(self.get_parameter("manipulator_cmd_publish_count").value))
         self.manipulator_cmd_publish_interval_sec = max(0.01, float(self.get_parameter("manipulator_cmd_publish_interval_sec").value))
         self.manipulator_cmd_republish_interval_sec = max(0.1, float(self.get_parameter("manipulator_cmd_republish_interval_sec").value))
+        self.require_manipulator_active_state_before_result = bool(
+            self.get_parameter("require_manipulator_active_state_before_result").value
+        )
         self.manipulator_task_timeout_sec = max(0.0, float(self.get_parameter("manipulator_task_timeout_sec").value))
 
         self.nav_action_name = str(self.get_parameter("nav_action_name").value)
@@ -354,6 +358,8 @@ class IndoorStudentsManager(Node):
         self.current_pose = None
         self.latest_manipulator_result: Optional[str] = None
         self.latest_manipulator_state: Optional[str] = None
+        self.latest_manipulator_result_time: Optional[float] = None
+        self.latest_manipulator_state_time: Optional[float] = None
         self.final_mode_active = False
         self.saved_final_params: Dict[str, Dict[str, Any]] = {}
 
@@ -370,9 +376,11 @@ class IndoorStudentsManager(Node):
         self.cmd_vel_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
         self.initialpose_pub = self.create_publisher(PoseWithCovarianceStamped, self.initial_pose_topic, 10)
 
+        # Command topics must be volatile. A latched command can replay an old
+        # manipulator action when a node restarts or reconnects.
         manipulator_qos = QoSProfile(depth=10)
         manipulator_qos.reliability = ReliabilityPolicy.RELIABLE
-        manipulator_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        manipulator_qos.durability = DurabilityPolicy.VOLATILE
         self.manipulator_task_cmd_pub = self.create_publisher(String, self.manipulator_task_cmd_topic, manipulator_qos)
 
         # ------------------------------------------------------------
@@ -459,10 +467,12 @@ class IndoorStudentsManager(Node):
 
     def manipulator_task_result_callback(self, msg: String):
         self.latest_manipulator_result = str(msg.data).strip()
+        self.latest_manipulator_result_time = time.time()
         self.get_logger().info(f"Received manipulator result: data='{self.latest_manipulator_result}'")
 
     def manipulator_task_state_callback(self, msg: String):
         self.latest_manipulator_state = str(msg.data).strip()
+        self.latest_manipulator_state_time = time.time()
         self.get_logger().info(f"Received manipulator state: data='{self.latest_manipulator_state}'")
 
     # ------------------------------------------------------------------
@@ -985,80 +995,108 @@ class IndoorStudentsManager(Node):
             return False
         data = str(received).strip()
         expected = str(expected_result).strip()
-        cmd = str(task_cmd).strip()
         if not data:
             return False
-        if data == expected:
-            return True
+        return data == expected
 
-        data_l = data.lower()
-        expected_l = expected.lower()
-        cmd_l = cmd.lower()
-        accepted = {
-            expected_l,
-            f"{cmd_l}_done",
-            f"{cmd_l}:done",
-            f"{cmd_l}:success",
-            f"{cmd_l}:completed",
-            f"done:{cmd_l}",
-            f"success:{cmd_l}",
-            f"completed:{cmd_l}",
-            "done",
-            "success",
-            "completed",
-            "true",
-            "1",
-        }
-        return data_l in accepted
+    def expected_active_states_for_task(self, task_cmd: str) -> set:
+        cmd = str(task_cmd).strip().upper()
+        if cmd == self.inside_button_task_cmd.upper():
+            return {
+                "INSIDE_ALIGNING",
+                "INSIDE_MARKER_SETTLE",
+                "BUTTON_PREPRESSING",
+                "BUTTON_HOMING",
+            }
+        if cmd == self.destination_task_cmd.upper():
+            return {
+                "UNLOAD_PREPARE",
+                "UNLOAD_EXECUTE",
+            }
+        return set()
+
+    def reset_manipulator_handshake_state(self):
+        self.latest_manipulator_result = None
+        self.latest_manipulator_result_time = None
+        self.latest_manipulator_state = None
+        self.latest_manipulator_state_time = None
+
+    def received_after(self, stamp: Optional[float], start_time: float) -> bool:
+        return stamp is not None and stamp >= start_time
 
     def send_manipulator_task_and_wait(self, task_cmd: str, expected_result: str) -> bool:
-        self.latest_manipulator_result = None
+        self.reset_manipulator_handshake_state()
         self.get_logger().info(
             "Manipulator handshake start: "
             f"publish String(data='{task_cmd}') to {self.manipulator_task_cmd_topic}, "
             f"wait String(data='{expected_result}') from {self.manipulator_task_result_topic}"
         )
 
-        self.publish_task_command("", repeat=2, interval_sec=0.05)
-        self.spin_sleep(0.1)
-        self.publish_task_command(
-            task_cmd,
-            repeat=self.manipulator_cmd_publish_count,
-            interval_sec=self.manipulator_cmd_publish_interval_sec,
-        )
-
         start_time = time.time()
-        last_republish_time = time.time()
+        last_publish_time = 0.0
         last_log_time = 0.0
+        publish_attempts = 0
+        observed_active_state = False
+        active_states = self.expected_active_states_for_task(task_cmd)
 
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.1)
             now = time.time()
 
-            if self.is_task_result_match(self.latest_manipulator_result, expected_result, task_cmd):
+            if (
+                self.latest_manipulator_state in active_states
+                and self.received_after(self.latest_manipulator_state_time, start_time)
+            ):
+                observed_active_state = True
+
+            result_is_current = self.received_after(self.latest_manipulator_result_time, start_time)
+            result_matches = self.is_task_result_match(
+                self.latest_manipulator_result,
+                expected_result,
+                task_cmd,
+            )
+            state_gate_ok = (
+                observed_active_state
+                or not self.require_manipulator_active_state_before_result
+                or not active_states
+            )
+
+            if result_is_current and result_matches and state_gate_ok:
                 self.get_logger().info(f"Manipulator task done. received='{self.latest_manipulator_result}'")
-                self.publish_task_command("", repeat=3, interval_sec=0.05)
                 return True
 
             if self.manipulator_task_timeout_sec > 0.0 and now - start_time > self.manipulator_task_timeout_sec:
                 self.get_logger().error(
                     "Timeout waiting manipulator task result. "
                     f"expected='{expected_result}', latest='{self.latest_manipulator_result}', "
+                    f"latest_state='{self.latest_manipulator_state}', "
+                    f"observed_active_state={observed_active_state}, "
                     f"timeout={self.manipulator_task_timeout_sec:.1f}s"
                 )
-                self.publish_task_command("", repeat=3, interval_sec=0.05)
                 return False
 
-            if now - last_republish_time >= self.manipulator_cmd_republish_interval_sec:
+            should_publish = (
+                publish_attempts == 0
+                or (
+                    not observed_active_state
+                    and publish_attempts < self.manipulator_cmd_publish_count
+                    and now - last_publish_time >= self.manipulator_cmd_republish_interval_sec
+                )
+            )
+            if should_publish:
                 self.publish_task_command(task_cmd, repeat=1, interval_sec=0.0)
-                last_republish_time = now
+                last_publish_time = now
+                publish_attempts += 1
 
             if now - last_log_time >= 1.0:
                 elapsed = now - start_time
                 self.get_logger().info(
                     "Waiting manipulator result: "
                     f"expected='{expected_result}', latest_result='{self.latest_manipulator_result}', "
-                    f"latest_state='{self.latest_manipulator_state}', elapsed={elapsed:.1f}s"
+                    f"latest_state='{self.latest_manipulator_state}', "
+                    f"observed_active_state={observed_active_state}, "
+                    f"publish_attempts={publish_attempts}/{self.manipulator_cmd_publish_count}, "
+                    f"elapsed={elapsed:.1f}s"
                 )
                 last_log_time = now
 

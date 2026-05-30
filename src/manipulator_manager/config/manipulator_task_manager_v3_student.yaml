@@ -42,10 +42,13 @@ manipulator_task_manager_v3_student:
     #   cmd_pos_flag 3 -> cmd_pos_flag 2 -> UNLOAD_DONE
     # =========================================================
     cmd_pos_flag_topic: /manipulator_hardware/cmd_pos_flag
+    mcu_result_topic: /mcu/result
+    mcu_unload_done: UNLOAD_DONE
     unload_prepare_cmd_pos_flag: 3
     unload_cmd_pos_flag: 2
     unload_step_delay_sec: 0.5
     unload_done_delay_sec: 0.2
+    unload_wait_for_result: true
 
     # Optional string command path.
     # Keep false when /manipulator_hardware/cmd_pos_flag already converts flags
@@ -69,3 +72,4 @@ manipulator_task_manager_v3_student:
     unload_timeout_sec: 25.0
     fsm_tick_sec: 0.05
     auto_reset_after_failure: true
+    duplicate_cmd_ignore_window_sec: 3.0

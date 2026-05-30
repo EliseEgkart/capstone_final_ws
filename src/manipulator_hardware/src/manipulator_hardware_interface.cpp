@@ -14,6 +14,7 @@
 #include <cstring>
 #include <exception>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "pluginlib/class_list_macros.hpp"
@@ -38,7 +39,7 @@ rclcpp::Time g_last_write_time;
 bool g_last_tx_time_valid = false;
 bool g_last_write_time_valid = false;
 int g_pending_cmd_pos_flag = 1;
-std::vector<uint32_t> g_fire_and_forget_ack_seqs;
+std::vector<std::pair<uint32_t, int>> g_fire_and_forget_ack_seqs;
 
 void resetSerialAckState()
 {
@@ -53,20 +54,23 @@ void resetSerialAckState()
   g_fire_and_forget_ack_seqs.clear();
 }
 
-bool consumeFireAndForgetAck(uint32_t ack_seq)
+bool consumeFireAndForgetAck(uint32_t ack_seq, int & cmd_pos_flag)
 {
-  const auto it = std::find(
-    g_fire_and_forget_ack_seqs.begin(),
-    g_fire_and_forget_ack_seqs.end(),
-    ack_seq);
-
-  if (it == g_fire_and_forget_ack_seqs.end())
+  for (auto it = g_fire_and_forget_ack_seqs.begin();
+       it != g_fire_and_forget_ack_seqs.end();
+       ++it)
   {
-    return false;
+    if (it->first != ack_seq)
+    {
+      continue;
+    }
+
+    cmd_pos_flag = it->second;
+    g_fire_and_forget_ack_seqs.erase(it);
+    return true;
   }
 
-  g_fire_and_forget_ack_seqs.erase(it);
-  return true;
+  return false;
 }
 
 speed_t getBaudRate(int baud_rate)
@@ -605,21 +609,30 @@ hardware_interface::return_type ManipulatorHardwareInterface::read(
             publishMcuResult(mcu_unload_done_);
           }
         }
-        else if (consumeFireAndForgetAck(ack_seq))
-        {
-          RCLCPP_INFO(
-            rclcpp::get_logger("ManipulatorHardwareInterface"),
-            "ACK matched fire-and-forget seq=%u",
-            ack_seq);
-        }
         else
         {
-          RCLCPP_WARN(
-            rclcpp::get_logger("ManipulatorHardwareInterface"),
-            "ACK seq mismatch or stale ACK. rx=%u, pending=%u, waiting=%s",
-            ack_seq,
-            g_pending_seq,
-            g_waiting_ack ? "true" : "false");
+          int fire_and_forget_cmd_pos_flag = default_cmd_pos_flag_;
+          if (consumeFireAndForgetAck(ack_seq, fire_and_forget_cmd_pos_flag))
+          {
+            RCLCPP_INFO(
+              rclcpp::get_logger("ManipulatorHardwareInterface"),
+              "ACK matched fire-and-forget seq=%u, cmd_pos_flag=%d",
+              ack_seq,
+              fire_and_forget_cmd_pos_flag);
+
+            // ACK only confirms that the ESP32 accepted the command.
+            // Physical unload completion is reported later as
+            // "UNLOADING COMPLETE" by the firmware.
+          }
+          else
+          {
+            RCLCPP_WARN(
+              rclcpp::get_logger("ManipulatorHardwareInterface"),
+              "ACK seq mismatch or stale ACK. rx=%u, pending=%u, waiting=%s",
+              ack_seq,
+              g_pending_seq,
+              g_waiting_ack ? "true" : "false");
+          }
         }
       }
       catch (const std::exception &)
@@ -639,6 +652,27 @@ hardware_interface::return_type ManipulatorHardwareInterface::read(
         rclcpp::get_logger("ManipulatorHardwareInterface"),
         "RX: %s",
         line.c_str());
+
+      if (line.rfind("ERR", 0) == 0)
+      {
+        publishMcuResult(line);
+      }
+    }
+    else if (line == "UNLOADING START")
+    {
+      RCLCPP_INFO(
+        rclcpp::get_logger("ManipulatorHardwareInterface"),
+        "RX: %s",
+        line.c_str());
+    }
+    else if (line == "UNLOADING COMPLETE")
+    {
+      RCLCPP_INFO(
+        rclcpp::get_logger("ManipulatorHardwareInterface"),
+        "RX: %s",
+        line.c_str());
+
+      publishMcuResult(mcu_unload_done_);
     }
     else if (line.rfind("STATE", 0) == 0)
     {
@@ -811,13 +845,9 @@ hardware_interface::return_type ManipulatorHardwareInterface::write(
   if (cmd_pos_flag != default_cmd_pos_flag_)
   {
     last_sent_commands_ = hw_commands_;
-    g_fire_and_forget_ack_seqs.push_back(seq);
+    g_fire_and_forget_ack_seqs.emplace_back(seq, cmd_pos_flag);
     g_last_write_time = time;
     g_last_write_time_valid = true;
-    if (cmd_pos_flag == unload_cmd_pos_flag_)
-    {
-      publishMcuResult(mcu_unload_done_);
-    }
     return hardware_interface::return_type::OK;
   }
 

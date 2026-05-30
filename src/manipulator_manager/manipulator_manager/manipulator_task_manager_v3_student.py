@@ -100,6 +100,8 @@ class ManipulatorTaskManagerV3Student(Node):
             "cmd_pos_flag_topic",
             "/manipulator_hardware/cmd_pos_flag",
         )
+        self.declare_parameter("mcu_result_topic", "/mcu/result")
+        self.declare_parameter("mcu_unload_done", "UNLOAD_DONE")
         self.declare_parameter("unload_prepare_cmd_pos_flag", 3)
         self.declare_parameter("unload_cmd_pos_flag", 2)
 
@@ -123,8 +125,10 @@ class ManipulatorTaskManagerV3Student(Node):
         self.declare_parameter("unload_timeout_sec", 25.0)
         self.declare_parameter("unload_step_delay_sec", 0.5)
         self.declare_parameter("unload_done_delay_sec", 0.2)
+        self.declare_parameter("unload_wait_for_result", True)
         self.declare_parameter("fsm_tick_sec", 0.05)
         self.declare_parameter("auto_reset_after_failure", True)
+        self.declare_parameter("duplicate_cmd_ignore_window_sec", 3.0)
 
         # =========================================================
         # Parameter values
@@ -162,6 +166,8 @@ class ManipulatorTaskManagerV3Student(Node):
         )
 
         self.cmd_pos_flag_topic = str(self.get_parameter("cmd_pos_flag_topic").value)
+        self.mcu_result_topic = str(self.get_parameter("mcu_result_topic").value)
+        self.mcu_unload_done = str(self.get_parameter("mcu_unload_done").value).upper()
         self.unload_prepare_cmd_pos_flag = int(
             self.get_parameter("unload_prepare_cmd_pos_flag").value
         )
@@ -198,9 +204,15 @@ class ManipulatorTaskManagerV3Student(Node):
         self.unload_done_delay_sec = float(
             self.get_parameter("unload_done_delay_sec").value
         )
+        self.unload_wait_for_result = bool(
+            self.get_parameter("unload_wait_for_result").value
+        )
         self.fsm_tick_sec = float(self.get_parameter("fsm_tick_sec").value)
         self.auto_reset_after_failure = bool(
             self.get_parameter("auto_reset_after_failure").value
+        )
+        self.duplicate_cmd_ignore_window_sec = float(
+            self.get_parameter("duplicate_cmd_ignore_window_sec").value
         )
 
         # =========================================================
@@ -211,6 +223,9 @@ class ManipulatorTaskManagerV3Student(Node):
         self._deadline = None
         self._delay_until = None
         self._pending_result_after_home: Optional[str] = None
+        self._last_completed_task: Optional[str] = None
+        self._last_completed_result: Optional[str] = None
+        self._last_completed_time = None
 
         # =========================================================
         # ROS interfaces
@@ -231,6 +246,12 @@ class ManipulatorTaskManagerV3Student(Node):
             String,
             self.prepress_result_topic,
             self._prepress_result_cb,
+            10,
+        )
+        self.mcu_result_sub = self.create_subscription(
+            String,
+            self.mcu_result_topic,
+            self._mcu_result_cb,
             10,
         )
 
@@ -340,13 +361,11 @@ class ManipulatorTaskManagerV3Student(Node):
         if self._state in (STATE_BUTTON_HOMING, STATE_HOME_ONLY):
             if text == self.home_done_text:
                 if self._state == STATE_HOME_ONLY:
-                    self._reset_to_idle()
-                    self._publish_result(RESULT_HOME_DONE)
+                    self._complete_task(RESULT_HOME_DONE)
                     return
 
                 result = self._pending_result_after_home or RESULT_INSIDE_BTN_DONE
-                self._reset_to_idle()
-                self._publish_result(result)
+                self._complete_task(result)
                 return
 
             if self._is_failure(text):
@@ -405,8 +424,7 @@ class ManipulatorTaskManagerV3Student(Node):
             self._start_home(STATE_BUTTON_HOMING, done_result)
             return
 
-        self._reset_to_idle()
-        self._publish_result(done_result)
+        self._complete_task(done_result)
 
     # =============================================================
     # Destination unload task
@@ -434,9 +452,29 @@ class ManipulatorTaskManagerV3Student(Node):
         if self.publish_esp32_cmd_string:
             self._publish_esp32_cmd(self.esp32_unload_cmd)
 
+    def _mcu_result_cb(self, msg: String) -> None:
+        text = msg.data.strip().upper()
+        if not text:
+            return
+
+        self.get_logger().info(f"[task_manager_v3_student] mcu_result='{text}'")
+
+        if self._state != STATE_UNLOAD_EXECUTE:
+            self.get_logger().debug(
+                f"[task_manager_v3_student] ignored mcu_result='{text}' "
+                f"in state={self._state}"
+            )
+            return
+
+        if text == self.mcu_unload_done:
+            self._finish_unload_success()
+            return
+
+        if self._is_failure(text):
+            self._fail_task(f"UNLOAD_MCU_FAILED:{text}")
+
     def _finish_unload_success(self) -> None:
-        self._reset_to_idle()
-        self._publish_result(RESULT_UNLOAD_DONE)
+        self._complete_task(RESULT_UNLOAD_DONE)
 
     # =============================================================
     # Home / cancel / failure
@@ -488,8 +526,39 @@ class ManipulatorTaskManagerV3Student(Node):
         self._pending_result_after_home = None
         self._set_state(STATE_IDLE)
 
+    def _complete_task(self, result: str) -> None:
+        completed_task = self._active_task
+        self._reset_to_idle()
+        self._remember_completed_task(completed_task, result)
+        self._publish_result(result)
+
+    def _remember_completed_task(self, task_name: Optional[str], result: str) -> None:
+        if task_name is None:
+            return
+        self._last_completed_task = task_name
+        self._last_completed_result = result
+        self._last_completed_time = self.get_clock().now()
+
+    def _is_recent_duplicate_completed_task(self, task_name: str) -> bool:
+        if self.duplicate_cmd_ignore_window_sec <= 0.0:
+            return False
+        if self._last_completed_task != task_name:
+            return False
+        if self._last_completed_result is None or self._last_completed_time is None:
+            return False
+
+        age = (self.get_clock().now() - self._last_completed_time).nanoseconds / 1e9
+        return age <= self.duplicate_cmd_ignore_window_sec
+
     def _accept_new_task(self, task_name: str) -> bool:
         if self._state != STATE_IDLE:
+            if task_name == self._active_task:
+                self.get_logger().warn(
+                    f"[task_manager_v3_student] duplicate active task ignored: "
+                    f"task={task_name}, state={self._state}"
+                )
+                return False
+
             self._publish_result(
                 f"BUSY:CURRENT_STATE={self._state},CURRENT_TASK={self._active_task}"
             )
@@ -498,6 +567,15 @@ class ManipulatorTaskManagerV3Student(Node):
                 f"state={self._state}, active_task={self._active_task}"
             )
             return False
+
+        if self._is_recent_duplicate_completed_task(task_name):
+            self.get_logger().warn(
+                f"[task_manager_v3_student] recent duplicate completed task ignored: "
+                f"task={task_name}, result={self._last_completed_result}"
+            )
+            self._publish_result(self._last_completed_result)
+            return False
+
         return True
 
     # =============================================================
@@ -516,12 +594,13 @@ class ManipulatorTaskManagerV3Student(Node):
             if self._state == STATE_UNLOAD_PREPARE:
                 self._publish_unload_execute_command()
                 self._set_state(STATE_UNLOAD_EXECUTE)
-                self._delay_until = self.get_clock().now() + Duration(
-                    seconds=self.unload_done_delay_sec
-                )
+                if not self.unload_wait_for_result:
+                    self._delay_until = self.get_clock().now() + Duration(
+                        seconds=self.unload_done_delay_sec
+                    )
                 return
 
-            if self._state == STATE_UNLOAD_EXECUTE:
+            if self._state == STATE_UNLOAD_EXECUTE and not self.unload_wait_for_result:
                 self._finish_unload_success()
                 return
 
@@ -604,6 +683,9 @@ class ManipulatorTaskManagerV3Student(Node):
             f"{self.complete_button_on_prepress_failure},"
             f"UNLOAD_PREPARE_FLAG={self.unload_prepare_cmd_pos_flag},"
             f"UNLOAD_FLAG={self.unload_cmd_pos_flag},"
+            f"UNLOAD_WAIT_FOR_RESULT={self.unload_wait_for_result},"
+            f"MCU_RESULT_TOPIC={self.mcu_result_topic},"
+            f"MCU_UNLOAD_DONE={self.mcu_unload_done},"
             f"PUBLISH_ESP32_CMD_STRING={self.publish_esp32_cmd_string}"
         )
         self._publish_result(status)
