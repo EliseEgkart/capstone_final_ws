@@ -30,7 +30,7 @@ manipulator_task_manager_v2:
     unload_assume_done_delay_sec: 5.0
 
     return_home_after_prepress: true
-    return_home_after_unload: true
+    return_home_after_unload: false
     complete_button_on_prepress_failure: true
     publish_button_done_on_prepress_start: false
     # Negative means latch forever: the same completed button command only

@@ -778,6 +778,15 @@ hardware_interface::return_type ManipulatorHardwareInterface::write(
     return hardware_interface::return_type::ERROR;
   }
 
+  if (cmd_pos_flag == unload_cmd_pos_flag_)
+  {
+    last_sent_commands_ = hw_commands_;
+    g_last_write_time = time;
+    g_last_write_time_valid = true;
+    publishMcuResult(mcu_unload_done_);
+    return hardware_interface::return_type::OK;
+  }
+
   g_pending_seq = seq;
   g_pending_packet = packet;
   g_pending_commands = hw_commands_;
