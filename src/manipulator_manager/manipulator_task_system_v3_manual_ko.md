@@ -104,7 +104,6 @@ amr_manipulator_task_timeout_sec=90.0
 amr_manipulator_cmd_publish_count=3
 amr_manipulator_cmd_republish_interval_sec=1.0
 amr_require_manipulator_active_state_before_result=true
-amr_final_approach_enable=false
 ```
 
 plan only로 버튼 접근 경로만 먼저 확인하려면:

@@ -84,7 +84,6 @@ def generate_launch_description():
     amr_require_manipulator_active_state_before_result = LaunchConfiguration(
         'amr_require_manipulator_active_state_before_result'
     )
-    amr_final_approach_enable = LaunchConfiguration('amr_final_approach_enable')
 
     declare_prepress_plan_only = DeclareLaunchArgument(
         'prepress_plan_only',
@@ -138,12 +137,6 @@ def generate_launch_description():
         'amr_require_manipulator_active_state_before_result',
         default_value='true',
         description='Require a matching manipulator active state before accepting a task result'
-    )
-
-    declare_amr_final_approach_enable = DeclareLaunchArgument(
-        'amr_final_approach_enable',
-        default_value='false',
-        description='Forwarded to indoor_students_manager final_approach_enable'
     )
 
     # =========================================================
@@ -228,10 +221,6 @@ def generate_launch_description():
                 amr_manipulator_task_timeout_sec,
                 value_type=float,
             ),
-            'final_approach_enable': ParameterValue(
-                amr_final_approach_enable,
-                value_type=bool,
-            ),
         }]
     )
 
@@ -253,7 +242,6 @@ def generate_launch_description():
         declare_amr_manipulator_cmd_publish_count,
         declare_amr_manipulator_cmd_republish_interval_sec,
         declare_amr_require_manipulator_active_state_before_result,
-        declare_amr_final_approach_enable,
 
         LogInfo(msg='[all_in_one] Launching manipulator all-in-one system'),
 

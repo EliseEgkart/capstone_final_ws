@@ -1,67 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-indoor_students_manager.py
 
-Nav2 기반 좁은 실내 반복 미션 매니저.
-
-Route:
-  start -> elevator_btn_front -> unload_spot -> start -> ... 무한 반복
-
-핵심 의도:
-  - 임의 cmd_vel 강제 이동을 하지 않는다.
-  - 모든 이동은 NavigateToPose action으로 수행한다.
-  - global path planning + local path planning을 유지한다.
-  - 단, 목표 근처에서 inflation/cost 때문에 로봇이 주춤거리며 waypoint로 못 들어가는 경우,
-    goal을 성공 처리하거나 cancel하지 않고, final-approach 모드로 cost 회피 성향만 낮춘다.
-  - final-approach 모드에서도 Nav2 action은 계속 유지되며, 실제 NavigateToPose 성공을 기다린다.
-
-YAML example:
-maps:
-  indoor:
-    map_yaml: "indoor_map_final.yaml"
-    start:
-      x: 0.106
-      y: 0.0254
-      yaw: -0.0761
-    elevator_btn_front:
-      x: 5.49
-      y: -1.29
-      yaw: 0.0082
-    unload_spot:
-      x: 4.68
-      y: -0.104
-      yaw: -3.1227
-
-Manipulator handshake:
-  elevator_btn_front 도착:
-    publish /manipulator_task_cmd    String(data="INSIDE_BTN_FRONT")
-    wait    /manipulator_task_result String(data="INSIDE_BTN_DONE")
-
-  unload_spot 도착:
-    publish /manipulator_task_cmd    String(data="DESTINATION_UNLOAD")
-    wait    /manipulator_task_result String(data="UNLOAD_DONE")
-
-Sound:
-  최초 start 출발 전: starting_bgm.mp3 -> robot_for_move.mp3 각각 1회
-  elevator_btn_front 도착: btn_clk_start.mp3 1회
-  unload_spot 도착: destination.mp3 1회
-  UNLOAD_DONE 수신: recover.mp3 1회
-"""
 
 import math
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import yaml
 
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
-from rcl_interfaces.msg import Parameter as ParameterMsg
-from rcl_interfaces.msg import ParameterType, ParameterValue
-from rcl_interfaces.srv import GetParameters, SetParameters
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from action_msgs.msg import GoalStatus
@@ -236,44 +186,6 @@ class IndoorStudentsManager(Node):
         self.declare_parameter("publish_initial_pose_on_start", True)
 
         # ------------------------------------------------------------
-        # Final approach parameters
-        # ------------------------------------------------------------
-        # 이 반경 안에 들어오면 도착 성공 처리하지 않고, cost 회피 성향만 낮춘 final-approach 모드로 전환한다.
-        self.declare_parameter("final_approach_enable", True)
-        self.declare_parameter("final_approach_start_radius", 0.70)
-        self.declare_parameter("final_approach_restore_after_goal", True)
-        self.declare_parameter("final_clear_costmap_on_enter", True)
-
-        # 실제 Nav2 노드 이름. 너의 all_in_one_launch.py/nav2_params.yaml에서 이름이 다르면 여기만 바꾸면 된다.
-        self.declare_parameter("controller_server_node", "/controller_server")
-        self.declare_parameter("local_costmap_node", "/local_costmap/local_costmap")
-        self.declare_parameter("global_costmap_node", "/global_costmap/global_costmap")
-
-        # DWB가 costmap 위 trajectory를 꺼리는 정도를 낮춘다.
-        # Nav2 YAML에서 FollowPath 플러그인 이름을 바꾸지 않았다면 보통 이 이름이 맞다.
-        self.declare_parameter("final_dwb_base_obstacle_scale_param", "FollowPath.BaseObstacle.scale")
-        self.declare_parameter("final_dwb_base_obstacle_scale", 0.0)
-
-        # Inflation cost를 끈다. 실제 장애물 cell은 그대로 남기고 inflated cost만 낮추는 목적이다.
-        # 너의 costmap plugin 이름이 inflation_layer가 아니면 이 파라미터 이름을 바꿔야 한다.
-        self.declare_parameter("final_local_inflation_enabled_param", "inflation_layer.enabled")
-        self.declare_parameter("final_global_inflation_enabled_param", "inflation_layer.enabled")
-        self.declare_parameter("final_disable_local_inflation", True)
-        self.declare_parameter("final_disable_global_inflation", True)
-
-        # 기본은 obstacle/static layer를 끄지 않는다.
-        # inflation 영역이 아니라 실제 obstacle layer cost 때문에 못 들어가는 경우에만 True로 바꾼다.
-        self.declare_parameter("final_local_obstacle_enabled_param", "obstacle_layer.enabled")
-        self.declare_parameter("final_global_obstacle_enabled_param", "obstacle_layer.enabled")
-        self.declare_parameter("final_disable_local_obstacle", False)
-        self.declare_parameter("final_disable_global_obstacle", False)
-
-        self.declare_parameter("final_local_static_enabled_param", "static_layer.enabled")
-        self.declare_parameter("final_global_static_enabled_param", "static_layer.enabled")
-        self.declare_parameter("final_disable_local_static", False)
-        self.declare_parameter("final_disable_global_static", False)
-
-        # ------------------------------------------------------------
         # Sound parameters
         # ------------------------------------------------------------
         default_sound_path = self._default_sound_path()
@@ -322,28 +234,6 @@ class IndoorStudentsManager(Node):
         self.retry_sleep_sec = max(0.0, float(self.get_parameter("retry_sleep_sec").value))
         self.publish_initial_pose_on_start = bool(self.get_parameter("publish_initial_pose_on_start").value)
 
-        self.final_approach_enable = bool(self.get_parameter("final_approach_enable").value)
-        self.final_approach_start_radius = max(0.05, float(self.get_parameter("final_approach_start_radius").value))
-        self.final_approach_restore_after_goal = bool(self.get_parameter("final_approach_restore_after_goal").value)
-        self.final_clear_costmap_on_enter = bool(self.get_parameter("final_clear_costmap_on_enter").value)
-        self.controller_server_node = str(self.get_parameter("controller_server_node").value)
-        self.local_costmap_node = str(self.get_parameter("local_costmap_node").value)
-        self.global_costmap_node = str(self.get_parameter("global_costmap_node").value)
-        self.final_dwb_base_obstacle_scale_param = str(self.get_parameter("final_dwb_base_obstacle_scale_param").value)
-        self.final_dwb_base_obstacle_scale = float(self.get_parameter("final_dwb_base_obstacle_scale").value)
-        self.final_local_inflation_enabled_param = str(self.get_parameter("final_local_inflation_enabled_param").value)
-        self.final_global_inflation_enabled_param = str(self.get_parameter("final_global_inflation_enabled_param").value)
-        self.final_disable_local_inflation = bool(self.get_parameter("final_disable_local_inflation").value)
-        self.final_disable_global_inflation = bool(self.get_parameter("final_disable_global_inflation").value)
-        self.final_local_obstacle_enabled_param = str(self.get_parameter("final_local_obstacle_enabled_param").value)
-        self.final_global_obstacle_enabled_param = str(self.get_parameter("final_global_obstacle_enabled_param").value)
-        self.final_disable_local_obstacle = bool(self.get_parameter("final_disable_local_obstacle").value)
-        self.final_disable_global_obstacle = bool(self.get_parameter("final_disable_global_obstacle").value)
-        self.final_local_static_enabled_param = str(self.get_parameter("final_local_static_enabled_param").value)
-        self.final_global_static_enabled_param = str(self.get_parameter("final_global_static_enabled_param").value)
-        self.final_disable_local_static = bool(self.get_parameter("final_disable_local_static").value)
-        self.final_disable_global_static = bool(self.get_parameter("final_disable_global_static").value)
-
         self.sound_enabled = bool(self.get_parameter("sound_enabled").value)
         self.sound_path = str(self.get_parameter("sound_path").value)
         self.starting_bgm_sound = str(self.get_parameter("starting_bgm_sound").value)
@@ -360,8 +250,6 @@ class IndoorStudentsManager(Node):
         self.latest_manipulator_state: Optional[str] = None
         self.latest_manipulator_result_time: Optional[float] = None
         self.latest_manipulator_state_time: Optional[float] = None
-        self.final_mode_active = False
-        self.saved_final_params: Dict[str, Dict[str, Any]] = {}
 
         # ------------------------------------------------------------
         # Subscribers
@@ -391,25 +279,6 @@ class IndoorStudentsManager(Node):
         self.clear_global_costmap_client = self.create_client(ClearEntireCostmap, "/global_costmap/clear_entirely_global_costmap")
         self.clear_local_costmap_client = self.create_client(ClearEntireCostmap, "/local_costmap/clear_entirely_local_costmap")
 
-        self.controller_get_param_client = self.create_client(
-            GetParameters, self._remote_param_service_name(self.controller_server_node, "get_parameters")
-        )
-        self.controller_set_param_client = self.create_client(
-            SetParameters, self._remote_param_service_name(self.controller_server_node, "set_parameters")
-        )
-        self.local_costmap_get_param_client = self.create_client(
-            GetParameters, self._remote_param_service_name(self.local_costmap_node, "get_parameters")
-        )
-        self.local_costmap_set_param_client = self.create_client(
-            SetParameters, self._remote_param_service_name(self.local_costmap_node, "set_parameters")
-        )
-        self.global_costmap_get_param_client = self.create_client(
-            GetParameters, self._remote_param_service_name(self.global_costmap_node, "get_parameters")
-        )
-        self.global_costmap_set_param_client = self.create_client(
-            SetParameters, self._remote_param_service_name(self.global_costmap_node, "set_parameters")
-        )
-
         # ------------------------------------------------------------
         # Speaker
         # ------------------------------------------------------------
@@ -426,10 +295,6 @@ class IndoorStudentsManager(Node):
             "IndoorStudentsManager ready. "
             f"waypoint_file={self.waypoint_file}, map_key={self.map_key}, "
             f"nav_action_name={self.nav_action_name}, cmd_vel_topic={self.cmd_vel_topic}, "
-            f"final_approach_enable={self.final_approach_enable}, "
-            f"final_approach_start_radius={self.final_approach_start_radius:.3f}, "
-            f"controller_server_node={self.controller_server_node}, "
-            f"local_costmap_node={self.local_costmap_node}, global_costmap_node={self.global_costmap_node}, "
             f"task_cmd_topic={self.manipulator_task_cmd_topic}, "
             f"task_result_topic={self.manipulator_task_result_topic}, "
             f"task_state_topic={self.manipulator_task_state_topic}, "
@@ -585,257 +450,6 @@ class IndoorStudentsManager(Node):
         return normalize_angle(target_yaw - current_yaw)
 
     # ------------------------------------------------------------------
-    # Remote parameter helpers for final approach
-    # ------------------------------------------------------------------
-    def _remote_param_service_name(self, node_name: str, service_name: str) -> str:
-        """
-        node_name='/controller_server', service_name='set_parameters'
-        -> '/controller_server/set_parameters'
-        """
-        base = str(node_name).strip()
-        if not base.startswith("/"):
-            base = "/" + base
-        return f"{base}/{service_name}"
-
-    def _parameter_value_to_python(self, value_msg: ParameterValue) -> Any:
-        t = int(value_msg.type)
-        if t == ParameterType.PARAMETER_BOOL:
-            return bool(value_msg.bool_value)
-        if t == ParameterType.PARAMETER_INTEGER:
-            return int(value_msg.integer_value)
-        if t == ParameterType.PARAMETER_DOUBLE:
-            return float(value_msg.double_value)
-        if t == ParameterType.PARAMETER_STRING:
-            return str(value_msg.string_value)
-        if t == ParameterType.PARAMETER_BYTE_ARRAY:
-            return list(value_msg.byte_array_value)
-        if t == ParameterType.PARAMETER_BOOL_ARRAY:
-            return list(value_msg.bool_array_value)
-        if t == ParameterType.PARAMETER_INTEGER_ARRAY:
-            return list(value_msg.integer_array_value)
-        if t == ParameterType.PARAMETER_DOUBLE_ARRAY:
-            return list(value_msg.double_array_value)
-        if t == ParameterType.PARAMETER_STRING_ARRAY:
-            return list(value_msg.string_array_value)
-        return None
-
-    def _python_to_parameter_value(self, value: Any) -> ParameterValue:
-        pv = ParameterValue()
-
-        # bool은 int의 subclass라서 반드시 int보다 먼저 검사해야 한다.
-        if isinstance(value, bool):
-            pv.type = ParameterType.PARAMETER_BOOL
-            pv.bool_value = bool(value)
-        elif isinstance(value, int):
-            pv.type = ParameterType.PARAMETER_INTEGER
-            pv.integer_value = int(value)
-        elif isinstance(value, float):
-            pv.type = ParameterType.PARAMETER_DOUBLE
-            pv.double_value = float(value)
-        elif isinstance(value, str):
-            pv.type = ParameterType.PARAMETER_STRING
-            pv.string_value = str(value)
-        elif isinstance(value, list):
-            if all(isinstance(v, bool) for v in value):
-                pv.type = ParameterType.PARAMETER_BOOL_ARRAY
-                pv.bool_array_value = list(value)
-            elif all(isinstance(v, int) and not isinstance(v, bool) for v in value):
-                pv.type = ParameterType.PARAMETER_INTEGER_ARRAY
-                pv.integer_array_value = list(value)
-            elif all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value):
-                pv.type = ParameterType.PARAMETER_DOUBLE_ARRAY
-                pv.double_array_value = [float(v) for v in value]
-            else:
-                pv.type = ParameterType.PARAMETER_STRING_ARRAY
-                pv.string_array_value = [str(v) for v in value]
-        else:
-            pv.type = ParameterType.PARAMETER_STRING
-            pv.string_value = str(value)
-
-        return pv
-
-    def _wait_service(self, client, service_label: str, timeout_sec: float = 0.5) -> bool:
-        try:
-            return bool(client.wait_for_service(timeout_sec=timeout_sec))
-        except Exception as e:
-            self.get_logger().warn(f"Service wait failed for {service_label}: {e}")
-            return False
-
-    def _get_remote_params(
-        self,
-        get_client,
-        node_name: str,
-        param_names: List[str],
-    ) -> Dict[str, Any]:
-        result_values: Dict[str, Any] = {}
-        names = [p for p in param_names if p]
-        if not names:
-            return result_values
-
-        service_label = self._remote_param_service_name(node_name, "get_parameters")
-        if not self._wait_service(get_client, service_label):
-            self.get_logger().warn(f"Parameter get service not available: {service_label}")
-            return result_values
-
-        req = GetParameters.Request()
-        req.names = names
-
-        try:
-            future = get_client.call_async(req)
-            rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
-            result = future.result()
-            if result is None:
-                self.get_logger().warn(f"Get parameters returned None from {node_name}: {names}")
-                return result_values
-
-            for name, value_msg in zip(names, result.values):
-                py_value = self._parameter_value_to_python(value_msg)
-                if py_value is not None:
-                    result_values[name] = py_value
-
-        except Exception as e:
-            self.get_logger().warn(f"Get parameters failed from {node_name}: names={names}, error={e}")
-
-        return result_values
-
-    def _set_remote_params(
-        self,
-        set_client,
-        node_name: str,
-        params: Dict[str, Any],
-    ) -> bool:
-        if not params:
-            return True
-
-        service_label = self._remote_param_service_name(node_name, "set_parameters")
-        if not self._wait_service(set_client, service_label):
-            self.get_logger().warn(f"Parameter set service not available: {service_label}")
-            return False
-
-        req = SetParameters.Request()
-        for name, value in params.items():
-            if value is None or name == "":
-                continue
-            param = ParameterMsg()
-            param.name = str(name)
-            param.value = self._python_to_parameter_value(value)
-            req.parameters.append(param)
-
-        if not req.parameters:
-            return True
-
-        try:
-            future = set_client.call_async(req)
-            rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
-            result = future.result()
-            if result is None:
-                self.get_logger().warn(f"Set parameters returned None from {node_name}: {params}")
-                return False
-
-            ok = True
-            for set_result, param in zip(result.results, req.parameters):
-                if not set_result.successful:
-                    ok = False
-                    self.get_logger().warn(
-                        f"Set parameter failed on {node_name}: {param.name}, reason={set_result.reason}"
-                    )
-            if ok:
-                self.get_logger().info(f"Set parameters on {node_name}: {params}")
-            return ok
-
-        except Exception as e:
-            self.get_logger().warn(f"Set parameters failed on {node_name}: params={params}, error={e}")
-            return False
-
-    def enter_final_approach_mode(self, name: str):
-        if not self.final_approach_enable or self.final_mode_active:
-            return
-
-        self.get_logger().warn(
-            f"{name}: ENTER FINAL-APPROACH MODE. "
-            "Nav2 goal은 cancel하지 않고 유지한 채, cost 회피 성향만 낮춘다."
-        )
-
-        self.saved_final_params = {
-            self.controller_server_node: self._get_remote_params(
-                self.controller_get_param_client,
-                self.controller_server_node,
-                [self.final_dwb_base_obstacle_scale_param],
-            ),
-            self.local_costmap_node: self._get_remote_params(
-                self.local_costmap_get_param_client,
-                self.local_costmap_node,
-                [
-                    self.final_local_inflation_enabled_param,
-                    self.final_local_obstacle_enabled_param,
-                    self.final_local_static_enabled_param,
-                ],
-            ),
-            self.global_costmap_node: self._get_remote_params(
-                self.global_costmap_get_param_client,
-                self.global_costmap_node,
-                [
-                    self.final_global_inflation_enabled_param,
-                    self.final_global_obstacle_enabled_param,
-                    self.final_global_static_enabled_param,
-                ],
-            ),
-        }
-
-        controller_updates: Dict[str, Any] = {}
-        if self.final_dwb_base_obstacle_scale_param:
-            controller_updates[self.final_dwb_base_obstacle_scale_param] = self.final_dwb_base_obstacle_scale
-
-        local_updates: Dict[str, Any] = {}
-        if self.final_disable_local_inflation and self.final_local_inflation_enabled_param:
-            local_updates[self.final_local_inflation_enabled_param] = False
-        if self.final_disable_local_obstacle and self.final_local_obstacle_enabled_param:
-            local_updates[self.final_local_obstacle_enabled_param] = False
-        if self.final_disable_local_static and self.final_local_static_enabled_param:
-            local_updates[self.final_local_static_enabled_param] = False
-
-        global_updates: Dict[str, Any] = {}
-        if self.final_disable_global_inflation and self.final_global_inflation_enabled_param:
-            global_updates[self.final_global_inflation_enabled_param] = False
-        if self.final_disable_global_obstacle and self.final_global_obstacle_enabled_param:
-            global_updates[self.final_global_obstacle_enabled_param] = False
-        if self.final_disable_global_static and self.final_global_static_enabled_param:
-            global_updates[self.final_global_static_enabled_param] = False
-
-        self._set_remote_params(self.controller_set_param_client, self.controller_server_node, controller_updates)
-        self._set_remote_params(self.local_costmap_set_param_client, self.local_costmap_node, local_updates)
-        self._set_remote_params(self.global_costmap_set_param_client, self.global_costmap_node, global_updates)
-
-        self.final_mode_active = True
-        if self.final_clear_costmap_on_enter:
-            self.clear_costmaps()
-            self.spin_sleep(0.2)
-
-    def exit_final_approach_mode(self, name: str):
-        if not self.final_mode_active:
-            return
-
-        if not self.final_approach_restore_after_goal:
-            self.get_logger().warn(
-                f"{name}: final-approach mode remains active because final_approach_restore_after_goal=False"
-            )
-            return
-
-        self.get_logger().info(f"{name}: EXIT FINAL-APPROACH MODE. Restore Nav2 parameters.")
-        saved_controller = self.saved_final_params.get(self.controller_server_node, {})
-        saved_local = self.saved_final_params.get(self.local_costmap_node, {})
-        saved_global = self.saved_final_params.get(self.global_costmap_node, {})
-
-        self._set_remote_params(self.controller_set_param_client, self.controller_server_node, saved_controller)
-        self._set_remote_params(self.local_costmap_set_param_client, self.local_costmap_node, saved_local)
-        self._set_remote_params(self.global_costmap_set_param_client, self.global_costmap_node, saved_global)
-
-        self.final_mode_active = False
-        self.saved_final_params = {}
-        self.clear_costmaps()
-        self.spin_sleep(0.2)
-
-    # ------------------------------------------------------------------
     # Nav2 navigation
     # ------------------------------------------------------------------
     def stop_robot(self, repeat: int = 10):
@@ -857,18 +471,10 @@ class IndoorStudentsManager(Node):
         """
         NavigateToPose로 이동한다.
         cmd_vel open-loop 이동은 사용하지 않는다.
-
-        목표 근처에서 cost 때문에 주춤거리면:
-          - goal cancel / 성공 처리 X
-          - final-approach mode로 전환
-          - Nav2 action은 계속 유지
-          - 실제 STATUS_SUCCEEDED를 기다림
         """
         attempt = 1
 
         while rclpy.ok():
-            self.exit_final_approach_mode(f"{name}: before attempt")
-
             if self.nav_max_retries > 0 and attempt > self.nav_max_retries:
                 self.get_logger().error(f"{name}: exceeded nav_max_retries={self.nav_max_retries}.")
                 return False
@@ -921,14 +527,6 @@ class IndoorStudentsManager(Node):
                 dist = self.distance_to_pose(pose_dict)
                 yaw_error = self.yaw_error_to_pose(pose_dict)
 
-                if (
-                    self.final_approach_enable
-                    and not self.final_mode_active
-                    and dist is not None
-                    and dist <= self.final_approach_start_radius
-                ):
-                    self.enter_final_approach_mode(name)
-
                 if self.nav_goal_timeout_sec > 0.0 and now - start_time > self.nav_goal_timeout_sec:
                     self.get_logger().warn(
                         f"{name}: nav_goal_timeout_sec reached. elapsed={now - start_time:.1f}s, "
@@ -941,14 +539,11 @@ class IndoorStudentsManager(Node):
                     self.get_logger().info(
                         f"{name}: navigating... "
                         f"dist={None if dist is None else round(dist, 3)}, "
-                        f"yaw_error={None if yaw_error is None else round(yaw_error, 3)}, "
-                        f"final_mode_active={self.final_mode_active}, "
-                        f"final_radius={self.final_approach_start_radius:.3f}"
+                        f"yaw_error={None if yaw_error is None else round(yaw_error, 3)}"
                     )
                     last_log_time = now
 
             if not result_future.done():
-                self.exit_final_approach_mode(f"{name}: retry after timeout")
                 self.clear_costmaps()
                 self.spin_sleep(self.retry_sleep_sec)
                 attempt += 1
@@ -957,7 +552,6 @@ class IndoorStudentsManager(Node):
             wrapped_result = result_future.result()
             if wrapped_result is None:
                 self.get_logger().error(f"{name}: result is None. Retry.")
-                self.exit_final_approach_mode(f"{name}: result None")
                 self.clear_costmaps()
                 self.spin_sleep(self.retry_sleep_sec)
                 attempt += 1
@@ -967,16 +561,14 @@ class IndoorStudentsManager(Node):
             if status == GoalStatus.STATUS_SUCCEEDED:
                 self.get_logger().info(f"{name}: Nav2 succeeded at actual waypoint goal.")
                 self.stop_robot(repeat=5)
-                self.exit_final_approach_mode(f"{name}: success")
                 if self.clear_costmap_after_each_goal:
                     self.clear_costmaps()
                 return True
 
             self.get_logger().error(
                 f"{name}: Nav2 failed with status={status}. "
-                "도착으로 인정하지 않고, cost parameter 조정 후 계속 재시도한다."
+                "도착으로 인정하지 않고 계속 재시도한다."
             )
-            self.exit_final_approach_mode(f"{name}: failed attempt")
             self.clear_costmaps()
             self.spin_sleep(self.retry_sleep_sec)
             attempt += 1
@@ -1213,7 +805,6 @@ def main(args=None):
     except KeyboardInterrupt:
         node.get_logger().info("KeyboardInterrupt received. Stop indoor mission.")
     finally:
-        node.exit_final_approach_mode("shutdown")
         node.stop_robot(repeat=10)
         node.speaker.shutdown()
         node.destroy_node()
