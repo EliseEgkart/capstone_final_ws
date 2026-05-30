@@ -48,7 +48,7 @@ def generate_launch_description():
     declare_unload_wait_for_result = DeclareLaunchArgument(
         'unload_wait_for_result',
         default_value='true',
-        description='Accepted for v2 launch compatibility; v3_student unload is fire-and-forget',
+        description='If true, v3_student waits for /mcu/result UNLOAD_DONE before completing unload',
     )
 
     arm_pose_commander_v2 = Node(

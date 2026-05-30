@@ -4,6 +4,7 @@ Student demo version of the top-level manipulator task FSM.
 
 Supported demo commands:
   - INSIDE_BTN_FRONT
+  - INSIDE_B1_BTN_FRONT
       inside scan -> marker settle -> prepress profile -> home -> INSIDE_BTN_DONE
   - DESTINATION_UNLOAD
       publish unload prepare flag(3) -> publish unload flag(2) -> UNLOAD_DONE
@@ -23,6 +24,7 @@ from std_msgs.msg import Int32, String
 
 
 CMD_INSIDE_BTN_FRONT = "INSIDE_BTN_FRONT"
+CMD_INSIDE_B1_BTN_FRONT = "INSIDE_B1_BTN_FRONT"
 CMD_DESTINATION_UNLOAD = "DESTINATION_UNLOAD"
 CMD_HOME = "HOME"
 CMD_CANCEL = "CANCEL"
@@ -285,7 +287,7 @@ class ManipulatorTaskManagerV3Student(Node):
         self.get_logger().info("[task_manager_v3_student] ready")
         self.get_logger().info(
             "[task_manager_v3_student] supported tasks: "
-            f"{CMD_INSIDE_BTN_FRONT}, {CMD_DESTINATION_UNLOAD}"
+            f"{CMD_INSIDE_BTN_FRONT}, {CMD_INSIDE_B1_BTN_FRONT}, {CMD_DESTINATION_UNLOAD}"
         )
         self.get_logger().info(
             "[task_manager_v3_student] repeated same command is allowed after IDLE"
@@ -317,7 +319,7 @@ class ManipulatorTaskManagerV3Student(Node):
             self._start_home_only()
             return
 
-        if cmd == CMD_INSIDE_BTN_FRONT:
+        if cmd in (CMD_INSIDE_BTN_FRONT, CMD_INSIDE_B1_BTN_FRONT):
             self._start_inside_button_task()
             return
 

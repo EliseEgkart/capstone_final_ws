@@ -430,7 +430,15 @@ class IndoorStudentsManager(Node):
             f"final_approach_start_radius={self.final_approach_start_radius:.3f}, "
             f"controller_server_node={self.controller_server_node}, "
             f"local_costmap_node={self.local_costmap_node}, global_costmap_node={self.global_costmap_node}, "
-            f"task_cmd_topic={self.manipulator_task_cmd_topic}, task_result_topic={self.manipulator_task_result_topic}"
+            f"task_cmd_topic={self.manipulator_task_cmd_topic}, "
+            f"task_result_topic={self.manipulator_task_result_topic}, "
+            f"task_state_topic={self.manipulator_task_state_topic}, "
+            f"inside_button=({self.inside_button_task_cmd}->{self.inside_button_expected_result}), "
+            f"destination=({self.destination_task_cmd}->{self.destination_expected_result}), "
+            f"cmd_publish_count={self.manipulator_cmd_publish_count}, "
+            f"cmd_republish_interval={self.manipulator_cmd_republish_interval_sec:.2f}s, "
+            f"require_active_state={self.require_manipulator_active_state_before_result}, "
+            f"manipulator_task_timeout={self.manipulator_task_timeout_sec:.1f}s"
         )
 
     # ------------------------------------------------------------------
@@ -1001,14 +1009,14 @@ class IndoorStudentsManager(Node):
 
     def expected_active_states_for_task(self, task_cmd: str) -> set:
         cmd = str(task_cmd).strip().upper()
-        if cmd == self.inside_button_task_cmd:
+        if cmd == str(self.inside_button_task_cmd).strip().upper():
             return {
                 "INSIDE_ALIGNING",
                 "INSIDE_MARKER_SETTLE",
                 "BUTTON_PREPRESSING",
                 "BUTTON_HOMING",
             }
-        if cmd == self.destination_task_cmd:
+        if cmd == str(self.destination_task_cmd).strip().upper():
             return {
                 "UNLOAD_PREPARE",
                 "UNLOAD_EXECUTE",

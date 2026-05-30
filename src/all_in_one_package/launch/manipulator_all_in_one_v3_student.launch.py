@@ -16,6 +16,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def get_launch_file(package_name: str, launch_file_name: str) -> str:
@@ -75,6 +76,15 @@ def generate_launch_description():
     arm_config = LaunchConfiguration('arm_config')
     prepress_config = LaunchConfiguration('prepress_config')
     task_config = LaunchConfiguration('task_config')
+    amr_manipulator_task_timeout_sec = LaunchConfiguration('amr_manipulator_task_timeout_sec')
+    amr_manipulator_cmd_publish_count = LaunchConfiguration('amr_manipulator_cmd_publish_count')
+    amr_manipulator_cmd_republish_interval_sec = LaunchConfiguration(
+        'amr_manipulator_cmd_republish_interval_sec'
+    )
+    amr_require_manipulator_active_state_before_result = LaunchConfiguration(
+        'amr_require_manipulator_active_state_before_result'
+    )
+    amr_final_approach_enable = LaunchConfiguration('amr_final_approach_enable')
 
     declare_prepress_plan_only = DeclareLaunchArgument(
         'prepress_plan_only',
@@ -85,7 +95,7 @@ def generate_launch_description():
     declare_unload_wait_for_result = DeclareLaunchArgument(
         'unload_wait_for_result',
         default_value='true',
-        description='Accepted for v2 launch compatibility; v3_student unload is fire-and-forget'
+        description='If true, v3_student waits for /mcu/result UNLOAD_DONE before completing unload'
     )
 
     declare_arm_config = DeclareLaunchArgument(
@@ -104,6 +114,36 @@ def generate_launch_description():
         'task_config',
         default_value=default_task_config,
         description='Forwarded only to manipulator_task_system_v3_student.launch.py'
+    )
+
+    declare_amr_manipulator_task_timeout_sec = DeclareLaunchArgument(
+        'amr_manipulator_task_timeout_sec',
+        default_value='90.0',
+        description='AMR timeout while waiting for manipulator task result; 0.0 means wait forever'
+    )
+
+    declare_amr_manipulator_cmd_publish_count = DeclareLaunchArgument(
+        'amr_manipulator_cmd_publish_count',
+        default_value='3',
+        description='Maximum AMR command publishes before manipulator active state is observed'
+    )
+
+    declare_amr_manipulator_cmd_republish_interval_sec = DeclareLaunchArgument(
+        'amr_manipulator_cmd_republish_interval_sec',
+        default_value='1.0',
+        description='AMR command republish interval while no manipulator active state has been observed'
+    )
+
+    declare_amr_require_manipulator_active_state_before_result = DeclareLaunchArgument(
+        'amr_require_manipulator_active_state_before_result',
+        default_value='true',
+        description='Require a matching manipulator active state before accepting a task result'
+    )
+
+    declare_amr_final_approach_enable = DeclareLaunchArgument(
+        'amr_final_approach_enable',
+        default_value='false',
+        description='Forwarded to indoor_students_manager final_approach_enable'
     )
 
     # =========================================================
@@ -168,7 +208,30 @@ def generate_launch_description():
             'manipulator_task_cmd_topic': '/manipulator_task_cmd',
             'manipulator_task_result_topic': '/manipulator_task_result',
             'manipulator_task_state_topic': '/manipulator_task_state',
-            'final_approach_enable': False,
+            'inside_button_task_cmd': 'INSIDE_BTN_FRONT',
+            'inside_button_expected_result': 'INSIDE_BTN_DONE',
+            'destination_task_cmd': 'DESTINATION_UNLOAD',
+            'destination_expected_result': 'UNLOAD_DONE',
+            'manipulator_cmd_publish_count': ParameterValue(
+                amr_manipulator_cmd_publish_count,
+                value_type=int,
+            ),
+            'manipulator_cmd_republish_interval_sec': ParameterValue(
+                amr_manipulator_cmd_republish_interval_sec,
+                value_type=float,
+            ),
+            'require_manipulator_active_state_before_result': ParameterValue(
+                amr_require_manipulator_active_state_before_result,
+                value_type=bool,
+            ),
+            'manipulator_task_timeout_sec': ParameterValue(
+                amr_manipulator_task_timeout_sec,
+                value_type=float,
+            ),
+            'final_approach_enable': ParameterValue(
+                amr_final_approach_enable,
+                value_type=bool,
+            ),
         }]
     )
 
@@ -186,6 +249,11 @@ def generate_launch_description():
         declare_arm_config,
         declare_prepress_config,
         declare_task_config,
+        declare_amr_manipulator_task_timeout_sec,
+        declare_amr_manipulator_cmd_publish_count,
+        declare_amr_manipulator_cmd_republish_interval_sec,
+        declare_amr_require_manipulator_active_state_before_result,
+        declare_amr_final_approach_enable,
 
         LogInfo(msg='[all_in_one] Launching manipulator all-in-one system'),
 
