@@ -59,8 +59,9 @@ import yaml
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
-from rclpy.parameter import Parameter, parameter_value_to_python
-from rclpy.parameter_client import AsyncParameterClient
+from rcl_interfaces.msg import Parameter as ParameterMsg
+from rcl_interfaces.msg import ParameterType, ParameterValue
+from rcl_interfaces.srv import GetParameters, SetParameters
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from action_msgs.msg import GoalStatus
@@ -382,9 +383,24 @@ class IndoorStudentsManager(Node):
         self.clear_global_costmap_client = self.create_client(ClearEntireCostmap, "/global_costmap/clear_entirely_global_costmap")
         self.clear_local_costmap_client = self.create_client(ClearEntireCostmap, "/local_costmap/clear_entirely_local_costmap")
 
-        self.controller_param_client = AsyncParameterClient(self, self.controller_server_node)
-        self.local_costmap_param_client = AsyncParameterClient(self, self.local_costmap_node)
-        self.global_costmap_param_client = AsyncParameterClient(self, self.global_costmap_node)
+        self.controller_get_param_client = self.create_client(
+            GetParameters, self._remote_param_service_name(self.controller_server_node, "get_parameters")
+        )
+        self.controller_set_param_client = self.create_client(
+            SetParameters, self._remote_param_service_name(self.controller_server_node, "set_parameters")
+        )
+        self.local_costmap_get_param_client = self.create_client(
+            GetParameters, self._remote_param_service_name(self.local_costmap_node, "get_parameters")
+        )
+        self.local_costmap_set_param_client = self.create_client(
+            SetParameters, self._remote_param_service_name(self.local_costmap_node, "set_parameters")
+        )
+        self.global_costmap_get_param_client = self.create_client(
+            GetParameters, self._remote_param_service_name(self.global_costmap_node, "get_parameters")
+        )
+        self.global_costmap_set_param_client = self.create_client(
+            SetParameters, self._remote_param_service_name(self.global_costmap_node, "set_parameters")
+        )
 
         # ------------------------------------------------------------
         # Speaker
@@ -553,16 +569,83 @@ class IndoorStudentsManager(Node):
     # ------------------------------------------------------------------
     # Remote parameter helpers for final approach
     # ------------------------------------------------------------------
-    def _wait_param_client(self, client: AsyncParameterClient, node_name: str, timeout_sec: float = 0.5) -> bool:
+    def _remote_param_service_name(self, node_name: str, service_name: str) -> str:
+        """
+        node_name='/controller_server', service_name='set_parameters'
+        -> '/controller_server/set_parameters'
+        """
+        base = str(node_name).strip()
+        if not base.startswith("/"):
+            base = "/" + base
+        return f"{base}/{service_name}"
+
+    def _parameter_value_to_python(self, value_msg: ParameterValue) -> Any:
+        t = int(value_msg.type)
+        if t == ParameterType.PARAMETER_BOOL:
+            return bool(value_msg.bool_value)
+        if t == ParameterType.PARAMETER_INTEGER:
+            return int(value_msg.integer_value)
+        if t == ParameterType.PARAMETER_DOUBLE:
+            return float(value_msg.double_value)
+        if t == ParameterType.PARAMETER_STRING:
+            return str(value_msg.string_value)
+        if t == ParameterType.PARAMETER_BYTE_ARRAY:
+            return list(value_msg.byte_array_value)
+        if t == ParameterType.PARAMETER_BOOL_ARRAY:
+            return list(value_msg.bool_array_value)
+        if t == ParameterType.PARAMETER_INTEGER_ARRAY:
+            return list(value_msg.integer_array_value)
+        if t == ParameterType.PARAMETER_DOUBLE_ARRAY:
+            return list(value_msg.double_array_value)
+        if t == ParameterType.PARAMETER_STRING_ARRAY:
+            return list(value_msg.string_array_value)
+        return None
+
+    def _python_to_parameter_value(self, value: Any) -> ParameterValue:
+        pv = ParameterValue()
+
+        # bool은 int의 subclass라서 반드시 int보다 먼저 검사해야 한다.
+        if isinstance(value, bool):
+            pv.type = ParameterType.PARAMETER_BOOL
+            pv.bool_value = bool(value)
+        elif isinstance(value, int):
+            pv.type = ParameterType.PARAMETER_INTEGER
+            pv.integer_value = int(value)
+        elif isinstance(value, float):
+            pv.type = ParameterType.PARAMETER_DOUBLE
+            pv.double_value = float(value)
+        elif isinstance(value, str):
+            pv.type = ParameterType.PARAMETER_STRING
+            pv.string_value = str(value)
+        elif isinstance(value, list):
+            if all(isinstance(v, bool) for v in value):
+                pv.type = ParameterType.PARAMETER_BOOL_ARRAY
+                pv.bool_array_value = list(value)
+            elif all(isinstance(v, int) and not isinstance(v, bool) for v in value):
+                pv.type = ParameterType.PARAMETER_INTEGER_ARRAY
+                pv.integer_array_value = list(value)
+            elif all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value):
+                pv.type = ParameterType.PARAMETER_DOUBLE_ARRAY
+                pv.double_array_value = [float(v) for v in value]
+            else:
+                pv.type = ParameterType.PARAMETER_STRING_ARRAY
+                pv.string_array_value = [str(v) for v in value]
+        else:
+            pv.type = ParameterType.PARAMETER_STRING
+            pv.string_value = str(value)
+
+        return pv
+
+    def _wait_service(self, client, service_label: str, timeout_sec: float = 0.5) -> bool:
         try:
-            return bool(client.wait_for_services(timeout_sec=timeout_sec))
+            return bool(client.wait_for_service(timeout_sec=timeout_sec))
         except Exception as e:
-            self.get_logger().warn(f"Parameter service wait failed for {node_name}: {e}")
+            self.get_logger().warn(f"Service wait failed for {service_label}: {e}")
             return False
 
     def _get_remote_params(
         self,
-        client: AsyncParameterClient,
+        get_client,
         node_name: str,
         param_names: List[str],
     ) -> Dict[str, Any]:
@@ -570,53 +653,61 @@ class IndoorStudentsManager(Node):
         names = [p for p in param_names if p]
         if not names:
             return result_values
-        if not self._wait_param_client(client, node_name):
-            self.get_logger().warn(f"Parameter service not available: {node_name}")
+
+        service_label = self._remote_param_service_name(node_name, "get_parameters")
+        if not self._wait_service(get_client, service_label):
+            self.get_logger().warn(f"Parameter get service not available: {service_label}")
             return result_values
 
+        req = GetParameters.Request()
+        req.names = names
+
         try:
-            future = client.get_parameters(names)
+            future = get_client.call_async(req)
             rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
             result = future.result()
             if result is None:
                 self.get_logger().warn(f"Get parameters returned None from {node_name}: {names}")
                 return result_values
+
             for name, value_msg in zip(names, result.values):
-                result_values[name] = parameter_value_to_python(value_msg)
+                py_value = self._parameter_value_to_python(value_msg)
+                if py_value is not None:
+                    result_values[name] = py_value
+
         except Exception as e:
             self.get_logger().warn(f"Get parameters failed from {node_name}: names={names}, error={e}")
+
         return result_values
 
     def _set_remote_params(
         self,
-        client: AsyncParameterClient,
+        set_client,
         node_name: str,
         params: Dict[str, Any],
     ) -> bool:
         if not params:
             return True
-        if not self._wait_param_client(client, node_name):
-            self.get_logger().warn(f"Parameter service not available: {node_name}")
+
+        service_label = self._remote_param_service_name(node_name, "set_parameters")
+        if not self._wait_service(set_client, service_label):
+            self.get_logger().warn(f"Parameter set service not available: {service_label}")
             return False
 
-        ros_params = []
+        req = SetParameters.Request()
         for name, value in params.items():
             if value is None or name == "":
                 continue
-            if isinstance(value, bool):
-                ros_params.append(Parameter(name, Parameter.Type.BOOL, bool(value)))
-            elif isinstance(value, int):
-                ros_params.append(Parameter(name, Parameter.Type.INTEGER, int(value)))
-            elif isinstance(value, float):
-                ros_params.append(Parameter(name, Parameter.Type.DOUBLE, float(value)))
-            else:
-                ros_params.append(Parameter(name, Parameter.Type.STRING, str(value)))
+            param = ParameterMsg()
+            param.name = str(name)
+            param.value = self._python_to_parameter_value(value)
+            req.parameters.append(param)
 
-        if not ros_params:
+        if not req.parameters:
             return True
 
         try:
-            future = client.set_parameters(ros_params)
+            future = set_client.call_async(req)
             rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
             result = future.result()
             if result is None:
@@ -624,15 +715,16 @@ class IndoorStudentsManager(Node):
                 return False
 
             ok = True
-            for set_result, ros_param in zip(result.results, ros_params):
+            for set_result, param in zip(result.results, req.parameters):
                 if not set_result.successful:
                     ok = False
                     self.get_logger().warn(
-                        f"Set parameter failed on {node_name}: {ros_param.name}, reason={set_result.reason}"
+                        f"Set parameter failed on {node_name}: {param.name}, reason={set_result.reason}"
                     )
             if ok:
                 self.get_logger().info(f"Set parameters on {node_name}: {params}")
             return ok
+
         except Exception as e:
             self.get_logger().warn(f"Set parameters failed on {node_name}: params={params}, error={e}")
             return False
@@ -648,12 +740,12 @@ class IndoorStudentsManager(Node):
 
         self.saved_final_params = {
             self.controller_server_node: self._get_remote_params(
-                self.controller_param_client,
+                self.controller_get_param_client,
                 self.controller_server_node,
                 [self.final_dwb_base_obstacle_scale_param],
             ),
             self.local_costmap_node: self._get_remote_params(
-                self.local_costmap_param_client,
+                self.local_costmap_get_param_client,
                 self.local_costmap_node,
                 [
                     self.final_local_inflation_enabled_param,
@@ -662,7 +754,7 @@ class IndoorStudentsManager(Node):
                 ],
             ),
             self.global_costmap_node: self._get_remote_params(
-                self.global_costmap_param_client,
+                self.global_costmap_get_param_client,
                 self.global_costmap_node,
                 [
                     self.final_global_inflation_enabled_param,
@@ -692,9 +784,9 @@ class IndoorStudentsManager(Node):
         if self.final_disable_global_static and self.final_global_static_enabled_param:
             global_updates[self.final_global_static_enabled_param] = False
 
-        self._set_remote_params(self.controller_param_client, self.controller_server_node, controller_updates)
-        self._set_remote_params(self.local_costmap_param_client, self.local_costmap_node, local_updates)
-        self._set_remote_params(self.global_costmap_param_client, self.global_costmap_node, global_updates)
+        self._set_remote_params(self.controller_set_param_client, self.controller_server_node, controller_updates)
+        self._set_remote_params(self.local_costmap_set_param_client, self.local_costmap_node, local_updates)
+        self._set_remote_params(self.global_costmap_set_param_client, self.global_costmap_node, global_updates)
 
         self.final_mode_active = True
         if self.final_clear_costmap_on_enter:
@@ -716,9 +808,9 @@ class IndoorStudentsManager(Node):
         saved_local = self.saved_final_params.get(self.local_costmap_node, {})
         saved_global = self.saved_final_params.get(self.global_costmap_node, {})
 
-        self._set_remote_params(self.controller_param_client, self.controller_server_node, saved_controller)
-        self._set_remote_params(self.local_costmap_param_client, self.local_costmap_node, saved_local)
-        self._set_remote_params(self.global_costmap_param_client, self.global_costmap_node, saved_global)
+        self._set_remote_params(self.controller_set_param_client, self.controller_server_node, saved_controller)
+        self._set_remote_params(self.local_costmap_set_param_client, self.local_costmap_node, saved_local)
+        self._set_remote_params(self.global_costmap_set_param_client, self.global_costmap_node, saved_global)
 
         self.final_mode_active = False
         self.saved_final_params = {}
