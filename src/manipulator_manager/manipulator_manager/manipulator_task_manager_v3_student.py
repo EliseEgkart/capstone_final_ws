@@ -9,8 +9,9 @@ This node intentionally manages only the manipulator-side demo sequence:
 * DESTINATION_UNLOAD: send ESP32 CMD_POS flags 3 then 2 through the hardware
   interface, then publish UNLOAD_DONE.
 
-For this student demo, done messages are published to /manipulator_task_cmd so
-the navigation demo can react without a separate result topic.
+The external topic contract is the same as manipulator_task_manager_v2:
+commands are received on /manipulator_task_cmd and done messages are published
+on /manipulator_task_result.
 """
 
 from __future__ import annotations
@@ -56,9 +57,9 @@ class ManipulatorTaskManagerV3Student(Node):
         super().__init__("manipulator_task_manager_v3_student")
 
         self.declare_parameter("task_cmd_topic", "/manipulator_task_cmd")
-        self.declare_parameter("done_topic", "/manipulator_task_cmd")
-        self.declare_parameter("state_topic", "/manipulator_task_state_v3_student")
-        self.declare_parameter("error_topic", "/manipulator_task_error_v3_student")
+        self.declare_parameter("done_topic", "/manipulator_task_result")
+        self.declare_parameter("state_topic", "/manipulator_task_state")
+        self.declare_parameter("error_topic", "/manipulator_task_error")
 
         self.declare_parameter("arm_flag_topic", "/arm_pose_commander_v2/flag")
         self.declare_parameter("arm_done_topic", "/arm_pose_commander_v2/done")

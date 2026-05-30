@@ -1,9 +1,9 @@
 manipulator_task_manager_v3_student:
   ros__parameters:
     task_cmd_topic: /manipulator_task_cmd
-    done_topic: /manipulator_task_cmd
-    state_topic: /manipulator_task_state_v3_student
-    error_topic: /manipulator_task_error_v3_student
+    done_topic: /manipulator_task_result
+    state_topic: /manipulator_task_state
+    error_topic: /manipulator_task_error
 
     arm_flag_topic: /arm_pose_commander_v2/flag
     arm_done_topic: /arm_pose_commander_v2/done
