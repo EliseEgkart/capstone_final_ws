@@ -220,7 +220,7 @@ local_costmap:
         cost_scaling_factor: 3.5
         # inflation_radius: 0.55
         # nav2_params2: narrow indoor map - reduce inflation thickness
-        inflation_radius: 0.28
+        inflation_radius: 0.30
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True

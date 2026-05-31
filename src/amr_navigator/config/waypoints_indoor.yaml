@@ -3,8 +3,8 @@ maps:
     map_yaml: "indoor_map_final.yaml"
 
     start:
-      x: 0.106
-      y: -0.1254
+      x: 0.156
+      y: -0.1654
       yaw: -0.0761
 
 
@@ -15,6 +15,6 @@ maps:
 
 
     unload_spot:
-      x: 4.68
+      x: 4.71
       y: -0.104
-      yaw: -3.1227
+      yaw: -3.141592
