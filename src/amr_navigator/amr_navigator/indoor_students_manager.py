@@ -1,6 +1,68 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+indoor_students_manager.py
 
+좁은 실내 맵용 Nav2 반복 주행 + 로봇팔 통신 매니저.
+
+Route:
+  start -> elevator_btn_front -> unload_spot -> start -> ... 무한 반복
+
+Waypoint YAML:
+maps:
+  indoor:
+    map_yaml: "indoor_map_final.yaml"
+
+    start:
+      x: 0.106
+      y: 0.0254
+      yaw: -0.0761
+
+    elevator_btn_front:
+      x: 5.49
+      y: -1.29
+      yaw: 0.0082
+
+    unload_spot:
+      x: 4.68
+      y: -0.104
+      yaw: -3.1227
+
+Manipulator communication:
+  AMR -> Manipulator:
+    /manipulator_task_cmd      std_msgs/msg/String
+
+  Manipulator -> AMR:
+    /manipulator_task_result   std_msgs/msg/String
+    /manipulator_task_state    std_msgs/msg/String
+
+Mission:
+  1) start에서 출발
+     - starting_bgm.mp3 1회
+     - robot_for_move.mp3 1회
+
+  2) elevator_btn_front 도착
+     - btn_clk_start.mp3 1회
+     - /manipulator_task_cmd 로 String(data="INSIDE_BTN_FRONT") 정확히 1회 발행
+     - /manipulator_task_result 에서 String(data="INSIDE_BTN_DONE") 대기
+
+  3) unload_spot 도착
+     - destination.mp3 1회
+     - /manipulator_task_cmd 로 String(data="DESTINATION_UNLOAD") 정확히 1회 발행
+     - /manipulator_task_result 에서 String(data="UNLOAD_DONE") 대기
+     - recover.mp3 1회
+
+  4) start 복귀 후 반복
+
+중요:
+  - 로봇팔 명령은 정확히 1회만 발행한다.
+  - 빈 문자열 "" clear 발행을 하지 않는다.
+  - result 대기 중 task_cmd를 재발행하지 않는다.
+  - TRANSIENT_LOCAL QoS를 사용하지 않는다.
+  - Nav2 costmap 파라미터를 런타임에 바꾸지 않는다.
+  - inflation_layer.enabled, obstacle_layer.enabled, static_layer.enabled 등을 건드리지 않는다.
+  - costmap clear service를 자동 호출하지 않는다.
+"""
 
 import math
 import os
@@ -12,7 +74,6 @@ import yaml
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from action_msgs.msg import GoalStatus
 from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
@@ -30,17 +91,6 @@ def yaw_to_quaternion(yaw: float) -> Quaternion:
     q.z = math.sin(yaw * 0.5)
     q.w = math.cos(yaw * 0.5)
     return q
-
-
-def quaternion_to_yaw(q: Quaternion) -> float:
-    return math.atan2(
-        2.0 * (q.w * q.z + q.x * q.y),
-        1.0 - 2.0 * (q.y * q.y + q.z * q.z),
-    )
-
-
-def normalize_angle(angle: float) -> float:
-    return math.atan2(math.sin(angle), math.cos(angle))
 
 
 class LocalMp3Speaker:
@@ -86,6 +136,7 @@ class LocalMp3Speaker:
             if timeout_sec is not None and time.time() - start_time > timeout_sec:
                 return False
             rclpy.spin_once(self.node, timeout_sec=0.05)
+
         return True
 
     def play_once(
@@ -103,10 +154,11 @@ class LocalMp3Speaker:
 
         if self.is_busy():
             if not wait_if_busy:
-                self.node.get_logger().info(f"[Speaker] busy, skip: {filename}")
+                self.node.get_logger().info(f"[Speaker] busy. skip: {filename}")
                 return False
+
             if not self.wait_until_idle(timeout_sec=busy_timeout_sec):
-                self.node.get_logger().warn(f"[Speaker] busy timeout, skip: {filename}")
+                self.node.get_logger().warn(f"[Speaker] busy timeout. skip: {filename}")
                 return False
 
         path = self._path(filename)
@@ -119,8 +171,10 @@ class LocalMp3Speaker:
             self.mixer.music.play(0)
             if once_key is not None:
                 self.played_once_keys.add(once_key)
-            self.node.get_logger().info(f"[Speaker] play: {filename}")
+
+            self.node.get_logger().info(f"[Speaker] play once: {filename}")
             return True
+
         except Exception as e:
             self.node.get_logger().error(f"[Speaker] play failed: {filename}, error={e}")
             return False
@@ -128,6 +182,7 @@ class LocalMp3Speaker:
     def shutdown(self):
         if not self.enabled or self.mixer is None:
             return
+
         try:
             self.mixer.music.stop()
         except Exception:
@@ -153,35 +208,40 @@ class IndoorStudentsManager(Node):
         self.declare_parameter("cmd_vel_topic", "/cmd_vel_nav")
         self.declare_parameter("initial_pose_topic", "/initialpose")
         self.declare_parameter("amcl_pose_topic", "/amcl_pose")
+
         self.declare_parameter("manipulator_task_cmd_topic", "/manipulator_task_cmd")
         self.declare_parameter("manipulator_task_result_topic", "/manipulator_task_result")
         self.declare_parameter("manipulator_task_state_topic", "/manipulator_task_state")
 
         # ------------------------------------------------------------
-        # Manipulator parameters
+        # Manipulator command/result parameters
         # ------------------------------------------------------------
         self.declare_parameter("inside_button_task_cmd", "INSIDE_BTN_FRONT")
         self.declare_parameter("inside_button_expected_result", "INSIDE_BTN_DONE")
         self.declare_parameter("destination_task_cmd", "DESTINATION_UNLOAD")
         self.declare_parameter("destination_expected_result", "UNLOAD_DONE")
-        self.declare_parameter("manipulator_cmd_publish_count", 10)
-        self.declare_parameter("manipulator_cmd_publish_interval_sec", 0.2)
-        self.declare_parameter("manipulator_cmd_republish_interval_sec", 1.0)
-        self.declare_parameter("require_manipulator_active_state_before_result", True)
+
         # 0.0이면 result를 받을 때까지 무한 대기
         self.declare_parameter("manipulator_task_timeout_sec", 0.0)
 
         # ------------------------------------------------------------
-        # Nav2 action parameters
+        # Nav2 parameters
         # ------------------------------------------------------------
         self.declare_parameter("nav_action_name", "navigate_to_pose")
         self.declare_parameter("nav_server_wait_sec", 2.0)
+
         # 0이면 성공할 때까지 계속 재시도
         self.declare_parameter("nav_max_retries", 0)
-        # 0.0이면 action timeout으로 cancel하지 않음
+
+        # 0.0이면 Nav2 goal timeout 사용 안 함
         self.declare_parameter("nav_goal_timeout_sec", 0.0)
-        self.declare_parameter("clear_costmap_before_each_goal", True)
-        self.declare_parameter("clear_costmap_after_each_goal", True)
+
+        # 중요:
+        # 자동 costmap clear 금지.
+        # 이 값이 True로 override되더라도 아래 코드에서는 자동 clear를 호출하지 않는다.
+        self.declare_parameter("clear_costmap_before_each_goal", False)
+        self.declare_parameter("clear_costmap_after_each_goal", False)
+
         self.declare_parameter("retry_sleep_sec", 0.5)
         self.declare_parameter("publish_initial_pose_on_start", True)
 
@@ -209,30 +269,60 @@ class IndoorStudentsManager(Node):
         self.cmd_vel_topic = str(self.get_parameter("cmd_vel_topic").value)
         self.initial_pose_topic = str(self.get_parameter("initial_pose_topic").value)
         self.amcl_pose_topic = str(self.get_parameter("amcl_pose_topic").value)
-        self.manipulator_task_cmd_topic = str(self.get_parameter("manipulator_task_cmd_topic").value)
-        self.manipulator_task_result_topic = str(self.get_parameter("manipulator_task_result_topic").value)
-        self.manipulator_task_state_topic = str(self.get_parameter("manipulator_task_state_topic").value)
+
+        self.manipulator_task_cmd_topic = str(
+            self.get_parameter("manipulator_task_cmd_topic").value
+        )
+        self.manipulator_task_result_topic = str(
+            self.get_parameter("manipulator_task_result_topic").value
+        )
+        self.manipulator_task_state_topic = str(
+            self.get_parameter("manipulator_task_state_topic").value
+        )
 
         self.inside_button_task_cmd = str(self.get_parameter("inside_button_task_cmd").value)
-        self.inside_button_expected_result = str(self.get_parameter("inside_button_expected_result").value)
-        self.destination_task_cmd = str(self.get_parameter("destination_task_cmd").value)
-        self.destination_expected_result = str(self.get_parameter("destination_expected_result").value)
-        self.manipulator_cmd_publish_count = max(1, int(self.get_parameter("manipulator_cmd_publish_count").value))
-        self.manipulator_cmd_publish_interval_sec = max(0.01, float(self.get_parameter("manipulator_cmd_publish_interval_sec").value))
-        self.manipulator_cmd_republish_interval_sec = max(0.1, float(self.get_parameter("manipulator_cmd_republish_interval_sec").value))
-        self.require_manipulator_active_state_before_result = bool(
-            self.get_parameter("require_manipulator_active_state_before_result").value
+        self.inside_button_expected_result = str(
+            self.get_parameter("inside_button_expected_result").value
         )
-        self.manipulator_task_timeout_sec = max(0.0, float(self.get_parameter("manipulator_task_timeout_sec").value))
+        self.destination_task_cmd = str(self.get_parameter("destination_task_cmd").value)
+        self.destination_expected_result = str(
+            self.get_parameter("destination_expected_result").value
+        )
+        self.manipulator_task_timeout_sec = max(
+            0.0,
+            float(self.get_parameter("manipulator_task_timeout_sec").value),
+        )
 
         self.nav_action_name = str(self.get_parameter("nav_action_name").value)
-        self.nav_server_wait_sec = max(0.1, float(self.get_parameter("nav_server_wait_sec").value))
-        self.nav_max_retries = max(0, int(self.get_parameter("nav_max_retries").value))
-        self.nav_goal_timeout_sec = max(0.0, float(self.get_parameter("nav_goal_timeout_sec").value))
-        self.clear_costmap_before_each_goal = bool(self.get_parameter("clear_costmap_before_each_goal").value)
-        self.clear_costmap_after_each_goal = bool(self.get_parameter("clear_costmap_after_each_goal").value)
-        self.retry_sleep_sec = max(0.0, float(self.get_parameter("retry_sleep_sec").value))
-        self.publish_initial_pose_on_start = bool(self.get_parameter("publish_initial_pose_on_start").value)
+        self.nav_server_wait_sec = max(
+            0.1,
+            float(self.get_parameter("nav_server_wait_sec").value),
+        )
+        self.nav_max_retries = max(
+            0,
+            int(self.get_parameter("nav_max_retries").value),
+        )
+        self.nav_goal_timeout_sec = max(
+            0.0,
+            float(self.get_parameter("nav_goal_timeout_sec").value),
+        )
+
+        # 값은 읽어서 로그에만 남긴다.
+        # 실제 go_to_pose_nav2()에서는 이 값으로 clear_costmaps()를 호출하지 않는다.
+        self.clear_costmap_before_each_goal = bool(
+            self.get_parameter("clear_costmap_before_each_goal").value
+        )
+        self.clear_costmap_after_each_goal = bool(
+            self.get_parameter("clear_costmap_after_each_goal").value
+        )
+
+        self.retry_sleep_sec = max(
+            0.0,
+            float(self.get_parameter("retry_sleep_sec").value),
+        )
+        self.publish_initial_pose_on_start = bool(
+            self.get_parameter("publish_initial_pose_on_start").value
+        )
 
         self.sound_enabled = bool(self.get_parameter("sound_enabled").value)
         self.sound_path = str(self.get_parameter("sound_path").value)
@@ -248,41 +338,69 @@ class IndoorStudentsManager(Node):
         self.current_pose = None
         self.latest_manipulator_result: Optional[str] = None
         self.latest_manipulator_state: Optional[str] = None
-        self.latest_manipulator_result_time: Optional[float] = None
-        self.latest_manipulator_state_time: Optional[float] = None
+        self.current_manipulator_task_cmd: Optional[str] = None
+        self.current_manipulator_expected_result: Optional[str] = None
 
         # ------------------------------------------------------------
         # Subscribers
         # ------------------------------------------------------------
-        self.create_subscription(PoseWithCovarianceStamped, self.amcl_pose_topic, self.amcl_pose_callback, 10)
-        self.create_subscription(String, self.manipulator_task_result_topic, self.manipulator_task_result_callback, 10)
-        self.create_subscription(String, self.manipulator_task_state_topic, self.manipulator_task_state_callback, 10)
+        self.create_subscription(
+            PoseWithCovarianceStamped,
+            self.amcl_pose_topic,
+            self.amcl_pose_callback,
+            10,
+        )
+        self.create_subscription(
+            String,
+            self.manipulator_task_result_topic,
+            self.manipulator_task_result_callback,
+            10,
+        )
+        self.create_subscription(
+            String,
+            self.manipulator_task_state_topic,
+            self.manipulator_task_state_callback,
+            10,
+        )
 
         # ------------------------------------------------------------
         # Publishers
         # ------------------------------------------------------------
         self.cmd_vel_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
-        self.initialpose_pub = self.create_publisher(PoseWithCovarianceStamped, self.initial_pose_topic, 10)
+        self.initialpose_pub = self.create_publisher(
+            PoseWithCovarianceStamped,
+            self.initial_pose_topic,
+            10,
+        )
 
-        # Command topics must be volatile. A latched command can replay an old
-        # manipulator action when a node restarts or reconnects.
-        manipulator_qos = QoSProfile(depth=10)
-        manipulator_qos.reliability = ReliabilityPolicy.RELIABLE
-        manipulator_qos.durability = DurabilityPolicy.VOLATILE
-        self.manipulator_task_cmd_pub = self.create_publisher(String, self.manipulator_task_cmd_topic, manipulator_qos)
+        # 중요:
+        # - TRANSIENT_LOCAL 사용 안 함
+        # - RELIABLE 커스텀 QoS 사용 안 함
+        # - 기본 depth=10 publisher
+        # - 명령은 publish_task_command_once()에서 정확히 1회만 발행
+        self.manipulator_task_cmd_pub = self.create_publisher(
+            String,
+            self.manipulator_task_cmd_topic,
+            10,
+        )
 
         # ------------------------------------------------------------
-        # Clients / action
+        # Clients / Action
         # ------------------------------------------------------------
         self.nav_client = ActionClient(self, NavigateToPose, self.nav_action_name)
         self.load_map_client = self.create_client(LoadMap, "/map_server/load_map")
-        self.clear_global_costmap_client = self.create_client(ClearEntireCostmap, "/global_costmap/clear_entirely_global_costmap")
-        self.clear_local_costmap_client = self.create_client(ClearEntireCostmap, "/local_costmap/clear_entirely_local_costmap")
+
+        # clear_costmap service client는 만들지 않는다.
+        # 이 파일에서는 costmap clear service를 자동 호출하지 않는다.
 
         # ------------------------------------------------------------
         # Speaker
         # ------------------------------------------------------------
-        self.speaker = LocalMp3Speaker(node=self, sound_path=self.sound_path, enabled=self.sound_enabled)
+        self.speaker = LocalMp3Speaker(
+            node=self,
+            sound_path=self.sound_path,
+            enabled=self.sound_enabled,
+        )
 
         # ------------------------------------------------------------
         # Load waypoint YAML
@@ -293,17 +411,16 @@ class IndoorStudentsManager(Node):
 
         self.get_logger().info(
             "IndoorStudentsManager ready. "
-            f"waypoint_file={self.waypoint_file}, map_key={self.map_key}, "
-            f"nav_action_name={self.nav_action_name}, cmd_vel_topic={self.cmd_vel_topic}, "
-            f"task_cmd_topic={self.manipulator_task_cmd_topic}, "
-            f"task_result_topic={self.manipulator_task_result_topic}, "
-            f"task_state_topic={self.manipulator_task_state_topic}, "
-            f"inside_button=({self.inside_button_task_cmd}->{self.inside_button_expected_result}), "
-            f"destination=({self.destination_task_cmd}->{self.destination_expected_result}), "
-            f"cmd_publish_count={self.manipulator_cmd_publish_count}, "
-            f"cmd_republish_interval={self.manipulator_cmd_republish_interval_sec:.2f}s, "
-            f"require_active_state={self.require_manipulator_active_state_before_result}, "
-            f"manipulator_task_timeout={self.manipulator_task_timeout_sec:.1f}s"
+            f"waypoint_file={self.waypoint_file}, "
+            f"map_key={self.map_key}, "
+            f"nav_action_name={self.nav_action_name}, "
+            f"cmd_vel_topic={self.cmd_vel_topic}, "
+            f"manipulator_task_cmd_topic={self.manipulator_task_cmd_topic}, "
+            f"manipulator_task_result_topic={self.manipulator_task_result_topic}, "
+            f"manipulator_task_state_topic={self.manipulator_task_state_topic}, "
+            f"clear_costmap_before_each_goal={self.clear_costmap_before_each_goal}, "
+            f"clear_costmap_after_each_goal={self.clear_costmap_after_each_goal}, "
+            "automatic_costmap_clear=disabled"
         )
 
     # ------------------------------------------------------------------
@@ -318,13 +435,22 @@ class IndoorStudentsManager(Node):
     def resolve_waypoint_file(self, waypoint_file_param: str) -> str:
         if waypoint_file_param:
             return waypoint_file_param
-        config_dir = os.path.join(get_package_share_directory(self.package_name), self.config_dir_name)
+
+        config_dir = os.path.join(
+            get_package_share_directory(self.package_name),
+            self.config_dir_name,
+        )
         return os.path.join(config_dir, "waypoints_indoor.yaml")
 
     def resolve_map_yaml_path(self, map_yaml: str) -> str:
         if os.path.isabs(map_yaml):
             return map_yaml
-        return os.path.join(get_package_share_directory(self.package_name), self.map_dir_name, map_yaml)
+
+        return os.path.join(
+            get_package_share_directory(self.package_name),
+            self.map_dir_name,
+            map_yaml,
+        )
 
     def spin_sleep(self, duration_sec: float):
         end_time = time.time() + float(duration_sec)
@@ -339,14 +465,20 @@ class IndoorStudentsManager(Node):
         self.current_pose = msg.pose.pose
 
     def manipulator_task_result_callback(self, msg: String):
-        self.latest_manipulator_result = str(msg.data).strip()
-        self.latest_manipulator_result_time = time.time()
-        self.get_logger().info(f"Received manipulator result: data='{self.latest_manipulator_result}'")
+        data = str(msg.data).strip()
+        self.latest_manipulator_result = data
+        self.get_logger().info(
+            f"Received manipulator task result from "
+            f"{self.manipulator_task_result_topic}: data='{data}'"
+        )
 
     def manipulator_task_state_callback(self, msg: String):
-        self.latest_manipulator_state = str(msg.data).strip()
-        self.latest_manipulator_state_time = time.time()
-        self.get_logger().info(f"Received manipulator state: data='{self.latest_manipulator_state}'")
+        data = str(msg.data).strip()
+        self.latest_manipulator_state = data
+        self.get_logger().info(
+            f"Received manipulator task state from "
+            f"{self.manipulator_task_state_topic}: data='{data}'"
+        )
 
     # ------------------------------------------------------------------
     # YAML / map helpers
@@ -354,16 +486,21 @@ class IndoorStudentsManager(Node):
     def get_indoor_info(self) -> Dict[str, Any]:
         maps = self.wp.get("maps", {})
         if self.map_key not in maps:
-            raise KeyError(f"waypoints YAML에 maps.{self.map_key}가 없습니다. 현재 maps 키={list(maps.keys())}")
+            raise KeyError(
+                f"waypoints YAML에 maps.{self.map_key}가 없습니다. "
+                f"현재 maps 키={list(maps.keys())}"
+            )
         return maps[self.map_key]
 
     def require_pose(self, map_info: Dict[str, Any], pose_key: str) -> PoseDict:
         if pose_key not in map_info:
             raise KeyError(f"waypoints YAML에 '{pose_key}' waypoint가 없습니다.")
+
         pose = map_info[pose_key]
         for field in ("x", "y", "yaw"):
             if field not in pose:
                 raise KeyError(f"waypoints YAML의 {pose_key}.{field} 값이 없습니다.")
+
         return pose
 
     def load_map(self, map_yaml: str) -> bool:
@@ -375,34 +512,21 @@ class IndoorStudentsManager(Node):
 
         req = LoadMap.Request()
         req.map_url = map_path
+
         future = self.load_map_client.call_async(req)
         rclpy.spin_until_future_complete(self, future)
-        result = future.result()
 
+        result = future.result()
         if result is None:
             self.get_logger().error("LoadMap returned None.")
             return False
 
         self.get_logger().info(f"LoadMap result={result.result}")
-        self.clear_costmaps()
+
+        # 중요:
+        # 여기서 self.clear_costmaps()를 호출하지 않는다.
         self.spin_sleep(1.0)
         return True
-
-    def clear_costmaps(self):
-        req = ClearEntireCostmap.Request()
-        if self.clear_global_costmap_client.wait_for_service(timeout_sec=0.5):
-            future = self.clear_global_costmap_client.call_async(req)
-            rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
-            self.get_logger().info("Requested global costmap clear.")
-        else:
-            self.get_logger().warn("Global costmap clear service not available.")
-
-        if self.clear_local_costmap_client.wait_for_service(timeout_sec=0.5):
-            future = self.clear_local_costmap_client.call_async(req)
-            rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
-            self.get_logger().info("Requested local costmap clear.")
-        else:
-            self.get_logger().warn("Local costmap clear service not available.")
 
     # ------------------------------------------------------------------
     # Pose helpers
@@ -423,31 +547,21 @@ class IndoorStudentsManager(Node):
         msg.pose.pose.position.x = float(pose_dict["x"])
         msg.pose.pose.position.y = float(pose_dict["y"])
         msg.pose.pose.orientation = yaw_to_quaternion(float(pose_dict["yaw"]))
+
         msg.pose.covariance[0] = 0.25
         msg.pose.covariance[7] = 0.25
         msg.pose.covariance[35] = 0.068
 
         self.get_logger().info(
             "Publish initial pose: "
-            f"x={float(pose_dict['x']):.3f}, y={float(pose_dict['y']):.3f}, yaw={float(pose_dict['yaw']):.4f}"
+            f"x={float(pose_dict['x']):.3f}, "
+            f"y={float(pose_dict['y']):.3f}, "
+            f"yaw={float(pose_dict['yaw']):.4f}"
         )
+
         for _ in range(20):
             self.initialpose_pub.publish(msg)
             rclpy.spin_once(self, timeout_sec=0.1)
-
-    def distance_to_pose(self, pose_dict: PoseDict) -> Optional[float]:
-        if self.current_pose is None:
-            return None
-        dx = self.current_pose.position.x - float(pose_dict["x"])
-        dy = self.current_pose.position.y - float(pose_dict["y"])
-        return math.hypot(dx, dy)
-
-    def yaw_error_to_pose(self, pose_dict: PoseDict) -> Optional[float]:
-        if self.current_pose is None:
-            return None
-        current_yaw = quaternion_to_yaw(self.current_pose.orientation)
-        target_yaw = float(pose_dict["yaw"])
-        return normalize_angle(target_yaw - current_yaw)
 
     # ------------------------------------------------------------------
     # Nav2 navigation
@@ -465,28 +579,39 @@ class IndoorStudentsManager(Node):
             self.get_logger().info(f"{label}: cancel requested.")
         except Exception as e:
             self.get_logger().warn(f"{label}: cancel failed: {e}")
+
         self.stop_robot(repeat=5)
 
     def go_to_pose_nav2(self, pose_dict: PoseDict, name: str) -> bool:
         """
         NavigateToPose로 이동한다.
-        cmd_vel open-loop 이동은 사용하지 않는다.
+
+        이 함수는 costmap layer parameter를 절대 바꾸지 않는다.
+        final-approach mode 없음.
+        inflation_layer.enabled 변경 없음.
+        obstacle_layer.enabled 변경 없음.
+        static_layer.enabled 변경 없음.
+        clear_costmaps() 자동 호출 없음.
         """
         attempt = 1
 
         while rclpy.ok():
             if self.nav_max_retries > 0 and attempt > self.nav_max_retries:
-                self.get_logger().error(f"{name}: exceeded nav_max_retries={self.nav_max_retries}.")
+                self.get_logger().error(
+                    f"{name}: exceeded nav_max_retries={self.nav_max_retries}."
+                )
                 return False
 
             self.get_logger().info(f"{name}: Nav2 attempt {attempt}")
 
-            if self.clear_costmap_before_each_goal:
-                self.clear_costmaps()
-                self.spin_sleep(0.2)
+            # 중요:
+            # goal 전 clear_costmaps() 호출하지 않는다.
+            # clear_costmap_before_each_goal 값이 True여도 자동 clear하지 않는다.
 
             if not self.nav_client.wait_for_server(timeout_sec=self.nav_server_wait_sec):
-                self.get_logger().error(f"{name}: Nav2 action server '{self.nav_action_name}' not available.")
+                self.get_logger().error(
+                    f"{name}: Nav2 action server '{self.nav_action_name}' not available."
+                )
                 self.spin_sleep(self.retry_sleep_sec)
                 attempt += 1
                 continue
@@ -496,13 +621,15 @@ class IndoorStudentsManager(Node):
 
             self.get_logger().info(
                 f"{name}: send NavigateToPose goal "
-                f"x={float(pose_dict['x']):.3f}, y={float(pose_dict['y']):.3f}, yaw={float(pose_dict['yaw']):.4f}"
+                f"x={float(pose_dict['x']):.3f}, "
+                f"y={float(pose_dict['y']):.3f}, "
+                f"yaw={float(pose_dict['yaw']):.4f}"
             )
 
             send_future = self.nav_client.send_goal_async(goal_msg)
             rclpy.spin_until_future_complete(self, send_future)
-            goal_handle = send_future.result()
 
+            goal_handle = send_future.result()
             if goal_handle is None:
                 self.get_logger().error(f"{name}: goal_handle is None.")
                 self.spin_sleep(self.retry_sleep_sec)
@@ -510,13 +637,15 @@ class IndoorStudentsManager(Node):
                 continue
 
             if not goal_handle.accepted:
-                self.get_logger().error(f"{name}: goal rejected. Clear costmaps and retry.")
-                self.clear_costmaps()
+                self.get_logger().error(f"{name}: goal rejected.")
+                # 중요:
+                # goal rejected 시에도 clear_costmaps() 호출하지 않는다.
                 self.spin_sleep(self.retry_sleep_sec)
                 attempt += 1
                 continue
 
             self.get_logger().info(f"{name}: goal accepted.")
+
             result_future = goal_handle.get_result_async()
             start_time = time.time()
             last_log_time = 0.0
@@ -524,27 +653,27 @@ class IndoorStudentsManager(Node):
             while rclpy.ok() and not result_future.done():
                 rclpy.spin_once(self, timeout_sec=0.1)
                 now = time.time()
-                dist = self.distance_to_pose(pose_dict)
-                yaw_error = self.yaw_error_to_pose(pose_dict)
 
-                if self.nav_goal_timeout_sec > 0.0 and now - start_time > self.nav_goal_timeout_sec:
-                    self.get_logger().warn(
-                        f"{name}: nav_goal_timeout_sec reached. elapsed={now - start_time:.1f}s, "
-                        f"dist={dist}, yaw_error={yaw_error}. Retry."
-                    )
-                    self.cancel_goal_and_wait(goal_handle, name)
-                    break
+                if self.nav_goal_timeout_sec > 0.0:
+                    elapsed = now - start_time
+                    if elapsed > self.nav_goal_timeout_sec:
+                        self.get_logger().warn(
+                            f"{name}: nav_goal_timeout_sec reached. "
+                            f"elapsed={elapsed:.1f}s. Retry."
+                        )
+                        self.cancel_goal_and_wait(goal_handle, name)
+                        break
 
                 if now - last_log_time >= 2.0:
+                    elapsed = now - start_time
                     self.get_logger().info(
-                        f"{name}: navigating... "
-                        f"dist={None if dist is None else round(dist, 3)}, "
-                        f"yaw_error={None if yaw_error is None else round(yaw_error, 3)}"
+                        f"{name}: navigating... elapsed={elapsed:.1f}s"
                     )
                     last_log_time = now
 
             if not result_future.done():
-                self.clear_costmaps()
+                # 중요:
+                # timeout/cancel 이후에도 clear_costmaps() 호출하지 않는다.
                 self.spin_sleep(self.retry_sleep_sec)
                 attempt += 1
                 continue
@@ -552,24 +681,27 @@ class IndoorStudentsManager(Node):
             wrapped_result = result_future.result()
             if wrapped_result is None:
                 self.get_logger().error(f"{name}: result is None. Retry.")
-                self.clear_costmaps()
+                # 중요:
+                # result None 시에도 clear_costmaps() 호출하지 않는다.
                 self.spin_sleep(self.retry_sleep_sec)
                 attempt += 1
                 continue
 
             status = wrapped_result.status
+
             if status == GoalStatus.STATUS_SUCCEEDED:
-                self.get_logger().info(f"{name}: Nav2 succeeded at actual waypoint goal.")
+                self.get_logger().info(f"{name}: Nav2 succeeded.")
                 self.stop_robot(repeat=5)
-                if self.clear_costmap_after_each_goal:
-                    self.clear_costmaps()
+
+                # 중요:
+                # goal 성공 후에도 clear_costmaps() 호출하지 않는다.
                 return True
 
             self.get_logger().error(
-                f"{name}: Nav2 failed with status={status}. "
-                "도착으로 인정하지 않고 계속 재시도한다."
+                f"{name}: Nav2 failed with status={status}. Retry."
             )
-            self.clear_costmaps()
+            # 중요:
+            # 실패 status에서도 clear_costmaps() 호출하지 않는다.
             self.spin_sleep(self.retry_sleep_sec)
             attempt += 1
 
@@ -578,125 +710,118 @@ class IndoorStudentsManager(Node):
     # ------------------------------------------------------------------
     # Manipulator handshake
     # ------------------------------------------------------------------
-    def publish_task_command(self, task_cmd: str, repeat: int = 1, interval_sec: float = 0.0):
+    def publish_task_command_once(self, task_cmd: str):
+        """
+        /manipulator_task_cmd 로 std_msgs/String 작업 명령을 정확히 1회만 발행한다.
+
+        반복 발행 없음.
+        빈 문자열 clear 발행 없음.
+        transient_local latch 없음.
+        """
         msg = String()
         msg.data = str(task_cmd)
-        repeat = max(1, int(repeat))
-        for idx in range(repeat):
-            self.manipulator_task_cmd_pub.publish(msg)
-            self.get_logger().info(
-                f"Publish {self.manipulator_task_cmd_topic}: data='{msg.data}' ({idx + 1}/{repeat})"
-            )
-            if idx < repeat - 1 and interval_sec > 0.0:
-                self.spin_sleep(interval_sec)
 
-    def is_task_result_match(self, received: Optional[str], expected_result: str, task_cmd: str) -> bool:
-        if received is None:
-            return False
-        data = str(received).strip()
-        expected = str(expected_result).strip()
-        if not data:
-            return False
-        return data == expected
-
-    def expected_active_states_for_task(self, task_cmd: str) -> set:
-        cmd = str(task_cmd).strip().upper()
-        if cmd == str(self.inside_button_task_cmd).strip().upper():
-            return {
-                "INSIDE_ALIGNING",
-                "INSIDE_MARKER_SETTLE",
-                "BUTTON_PREPRESSING",
-                "BUTTON_HOMING",
-            }
-        if cmd == str(self.destination_task_cmd).strip().upper():
-            return {
-                "UNLOAD_PREPARE",
-                "UNLOAD_EXECUTE",
-            }
-        return set()
-
-    def reset_manipulator_handshake_state(self):
-        self.latest_manipulator_result = None
-        self.latest_manipulator_result_time = None
-        self.latest_manipulator_state = None
-        self.latest_manipulator_state_time = None
-
-    def received_after(self, stamp: Optional[float], start_time: float) -> bool:
-        return stamp is not None and stamp >= start_time
-
-    def send_manipulator_task_and_wait(self, task_cmd: str, expected_result: str) -> bool:
-        self.reset_manipulator_handshake_state()
+        self.manipulator_task_cmd_pub.publish(msg)
         self.get_logger().info(
-            "Manipulator handshake start: "
-            f"publish String(data='{task_cmd}') to {self.manipulator_task_cmd_topic}, "
-            f"wait String(data='{expected_result}') from {self.manipulator_task_result_topic}"
+            f"Publish manipulator task command ONCE to "
+            f"{self.manipulator_task_cmd_topic}: data='{msg.data}'"
         )
 
+    def is_task_result_match(
+        self,
+        received: Optional[str],
+        expected_result: str,
+    ) -> bool:
+        """
+        결과 문자열은 정확히 expected_result와 같을 때만 성공으로 인정한다.
+
+        예:
+          expected_result="INSIDE_BTN_DONE"이면
+          received도 정확히 "INSIDE_BTN_DONE"이어야 한다.
+
+        "done", "success", "true", "1" 같은 일반 문자열은 성공으로 인정하지 않는다.
+        """
+        if received is None:
+            return False
+
+        data = str(received).strip()
+        expected = str(expected_result).strip()
+
+        return data == expected
+
+    def send_manipulator_task_and_wait(
+        self,
+        task_cmd: str,
+        expected_result: str,
+    ) -> bool:
+        """
+        AMR -> Manipulator:
+          /manipulator_task_cmd String(data=<task_cmd>) 정확히 1회 발행
+
+        Manipulator -> AMR:
+          /manipulator_task_result String(data=<expected_result>) 수신 대기
+
+        반복 발행 없음.
+        빈 문자열 clear 발행 없음.
+        result 대기 중 재발행 없음.
+        active state gate 없음.
+        """
+        self.current_manipulator_task_cmd = task_cmd
+        self.current_manipulator_expected_result = expected_result
+        self.latest_manipulator_result = None
+
+        self.get_logger().info(
+            f"Manipulator handshake start: publish ONCE "
+            f"{self.manipulator_task_cmd_topic} String(data='{task_cmd}'), "
+            f"wait {self.manipulator_task_result_topic} "
+            f"String(data='{expected_result}')"
+        )
+
+        # 핵심: 여기서 정확히 한 번만 보낸다.
+        self.publish_task_command_once(task_cmd)
+
         start_time = time.time()
-        last_publish_time = 0.0
         last_log_time = 0.0
-        publish_attempts = 0
-        observed_active_state = False
-        active_states = self.expected_active_states_for_task(task_cmd)
 
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.1)
             now = time.time()
 
-            if (
-                self.latest_manipulator_state in active_states
-                and self.received_after(self.latest_manipulator_state_time, start_time)
-            ):
-                observed_active_state = True
-
-            result_is_current = self.received_after(self.latest_manipulator_result_time, start_time)
-            result_matches = self.is_task_result_match(
+            if self.is_task_result_match(
                 self.latest_manipulator_result,
                 expected_result,
-                task_cmd,
-            )
-            state_gate_ok = (
-                observed_active_state
-                or not self.require_manipulator_active_state_before_result
-                or not active_states
-            )
-
-            if result_is_current and result_matches and state_gate_ok:
-                self.get_logger().info(f"Manipulator task done. received='{self.latest_manipulator_result}'")
+            ):
+                self.get_logger().info(
+                    f"Manipulator task done: "
+                    f"received result='{self.latest_manipulator_result}'."
+                )
+                self.current_manipulator_task_cmd = None
+                self.current_manipulator_expected_result = None
                 return True
 
-            if self.manipulator_task_timeout_sec > 0.0 and now - start_time > self.manipulator_task_timeout_sec:
+            if (
+                self.manipulator_task_timeout_sec > 0.0
+                and now - start_time > self.manipulator_task_timeout_sec
+            ):
                 self.get_logger().error(
-                    "Timeout waiting manipulator task result. "
-                    f"expected='{expected_result}', latest='{self.latest_manipulator_result}', "
-                    f"latest_state='{self.latest_manipulator_state}', "
-                    f"observed_active_state={observed_active_state}, "
+                    f"Timeout waiting for manipulator task result. "
+                    f"expected='{expected_result}', "
+                    f"latest='{self.latest_manipulator_result}', "
                     f"timeout={self.manipulator_task_timeout_sec:.1f}s"
                 )
+                self.current_manipulator_task_cmd = None
+                self.current_manipulator_expected_result = None
                 return False
-
-            should_publish = (
-                publish_attempts == 0
-                or (
-                    not observed_active_state
-                    and publish_attempts < self.manipulator_cmd_publish_count
-                    and now - last_publish_time >= self.manipulator_cmd_republish_interval_sec
-                )
-            )
-            if should_publish:
-                self.publish_task_command(task_cmd, repeat=1, interval_sec=0.0)
-                last_publish_time = now
-                publish_attempts += 1
 
             if now - last_log_time >= 1.0:
                 elapsed = now - start_time
                 self.get_logger().info(
-                    "Waiting manipulator result: "
-                    f"expected='{expected_result}', latest_result='{self.latest_manipulator_result}', "
+                    f"Waiting manipulator task result: "
+                    f"expected='{expected_result}', "
+                    f"latest_result='{self.latest_manipulator_result}', "
                     f"latest_state='{self.latest_manipulator_state}', "
-                    f"observed_active_state={observed_active_state}, "
-                    f"publish_attempts={publish_attempts}/{self.manipulator_cmd_publish_count}, "
-                    f"elapsed={elapsed:.1f}s"
+                    f"elapsed={elapsed:.1f}s, "
+                    f"command='{task_cmd}'"
                 )
                 last_log_time = now
 
@@ -708,13 +833,18 @@ class IndoorStudentsManager(Node):
     def run(self):
         try:
             indoor_info = self.get_indoor_info()
+
             if "map_yaml" not in indoor_info:
                 raise KeyError("waypoints YAML의 maps.indoor.map_yaml 값이 없습니다.")
 
             map_yaml = str(indoor_info["map_yaml"])
             start_pose = self.require_pose(indoor_info, "start")
-            elevator_btn_front_pose = self.require_pose(indoor_info, "elevator_btn_front")
+            elevator_btn_front_pose = self.require_pose(
+                indoor_info,
+                "elevator_btn_front",
+            )
             unload_spot_pose = self.require_pose(indoor_info, "unload_spot")
+
         except Exception as e:
             self.get_logger().error(str(e))
             return
@@ -725,13 +855,16 @@ class IndoorStudentsManager(Node):
         if self.publish_initial_pose_on_start:
             self.publish_initial_pose(start_pose)
             self.spin_sleep(1.0)
-            self.clear_costmaps()
+
+            # 중요:
+            # 여기서 self.clear_costmaps() 호출하지 않는다.
 
         self.speaker.play_once(
             self.starting_bgm_sound,
             once_key="mission_starting_bgm_once",
             wait_if_busy=True,
         )
+
         self.speaker.play_once(
             self.robot_for_move_sound,
             once_key="mission_robot_for_move_once",
@@ -739,6 +872,7 @@ class IndoorStudentsManager(Node):
         )
 
         cycle = 1
+
         self.get_logger().info(
             "Indoor Nav2 mission loop started. Ctrl+C로 종료. "
             "Route: start -> elevator_btn_front -> unload_spot -> start -> ..."
@@ -747,7 +881,13 @@ class IndoorStudentsManager(Node):
         while rclpy.ok():
             self.get_logger().info(f"========== cycle {cycle} start ==========")
 
-            if not self.go_to_pose_nav2(elevator_btn_front_pose, f"cycle {cycle}: start -> elevator_btn_front"):
+            # --------------------------------------------------------
+            # 1) start -> elevator_btn_front
+            # --------------------------------------------------------
+            if not self.go_to_pose_nav2(
+                elevator_btn_front_pose,
+                f"cycle {cycle}: start -> elevator_btn_front",
+            ):
                 self.get_logger().error("Failed to navigate to elevator_btn_front.")
                 break
 
@@ -757,6 +897,7 @@ class IndoorStudentsManager(Node):
                 wait_if_busy=True,
             )
 
+            # elevator_btn_front 도착 후 로봇팔에 INSIDE_BTN_FRONT 1회 발행
             if not self.send_manipulator_task_and_wait(
                 task_cmd=self.inside_button_task_cmd,
                 expected_result=self.inside_button_expected_result,
@@ -764,7 +905,13 @@ class IndoorStudentsManager(Node):
                 self.get_logger().error("Failed while waiting INSIDE_BTN_DONE.")
                 break
 
-            if not self.go_to_pose_nav2(unload_spot_pose, f"cycle {cycle}: elevator_btn_front -> unload_spot"):
+            # --------------------------------------------------------
+            # 2) elevator_btn_front -> unload_spot
+            # --------------------------------------------------------
+            if not self.go_to_pose_nav2(
+                unload_spot_pose,
+                f"cycle {cycle}: elevator_btn_front -> unload_spot",
+            ):
                 self.get_logger().error("Failed to navigate to unload_spot.")
                 break
 
@@ -774,6 +921,7 @@ class IndoorStudentsManager(Node):
                 wait_if_busy=True,
             )
 
+            # unload_spot 도착 후 로봇팔에 DESTINATION_UNLOAD 1회 발행
             if not self.send_manipulator_task_and_wait(
                 task_cmd=self.destination_task_cmd,
                 expected_result=self.destination_expected_result,
@@ -787,7 +935,13 @@ class IndoorStudentsManager(Node):
                 wait_if_busy=True,
             )
 
-            if not self.go_to_pose_nav2(start_pose, f"cycle {cycle}: unload_spot -> start"):
+            # --------------------------------------------------------
+            # 3) unload_spot -> start
+            # --------------------------------------------------------
+            if not self.go_to_pose_nav2(
+                start_pose,
+                f"cycle {cycle}: unload_spot -> start",
+            ):
                 self.get_logger().error("Failed to navigate to start.")
                 break
 
@@ -800,6 +954,7 @@ class IndoorStudentsManager(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = IndoorStudentsManager()
+
     try:
         node.run()
     except KeyboardInterrupt:
@@ -813,4 +968,3 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
-

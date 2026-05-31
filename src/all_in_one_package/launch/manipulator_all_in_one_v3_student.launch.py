@@ -76,13 +76,8 @@ def generate_launch_description():
     arm_config = LaunchConfiguration('arm_config')
     prepress_config = LaunchConfiguration('prepress_config')
     task_config = LaunchConfiguration('task_config')
-    amr_manipulator_task_timeout_sec = LaunchConfiguration('amr_manipulator_task_timeout_sec')
-    amr_manipulator_cmd_publish_count = LaunchConfiguration('amr_manipulator_cmd_publish_count')
-    amr_manipulator_cmd_republish_interval_sec = LaunchConfiguration(
-        'amr_manipulator_cmd_republish_interval_sec'
-    )
-    amr_require_manipulator_active_state_before_result = LaunchConfiguration(
-        'amr_require_manipulator_active_state_before_result'
+    amr_manipulator_task_timeout_sec = LaunchConfiguration(
+        'amr_manipulator_task_timeout_sec'
     )
 
     declare_prepress_plan_only = DeclareLaunchArgument(
@@ -121,24 +116,6 @@ def generate_launch_description():
         description='AMR timeout while waiting for manipulator task result; 0.0 means wait forever'
     )
 
-    declare_amr_manipulator_cmd_publish_count = DeclareLaunchArgument(
-        'amr_manipulator_cmd_publish_count',
-        default_value='3',
-        description='Maximum AMR command publishes before manipulator active state is observed'
-    )
-
-    declare_amr_manipulator_cmd_republish_interval_sec = DeclareLaunchArgument(
-        'amr_manipulator_cmd_republish_interval_sec',
-        default_value='1.0',
-        description='AMR command republish interval while no manipulator active state has been observed'
-    )
-
-    declare_amr_require_manipulator_active_state_before_result = DeclareLaunchArgument(
-        'amr_require_manipulator_active_state_before_result',
-        default_value='true',
-        description='Require a matching manipulator active state before accepting a task result'
-    )
-
     # =========================================================
     # Launch file paths
     # =========================================================
@@ -173,12 +150,6 @@ def generate_launch_description():
     # =========================================================
     # Camera perception launch as an isolated process
     # =========================================================
-    # NOTE:
-    # - This intentionally uses ExecuteProcess instead of IncludeLaunchDescription.
-    # - It prevents all parent launch arguments such as prepress_plan_only,
-    #   unload_wait_for_result, arm_config, prepress_config, and task_config
-    #   from leaking into camera_perception_pkg/manipulator_perception.launch.py
-    #   and then into realsense2_camera/rs_launch.py.
     camera_perception_process = ExecuteProcess(
         cmd=[
             'ros2',
@@ -201,22 +172,15 @@ def generate_launch_description():
             'manipulator_task_cmd_topic': '/manipulator_task_cmd',
             'manipulator_task_result_topic': '/manipulator_task_result',
             'manipulator_task_state_topic': '/manipulator_task_state',
+
             'inside_button_task_cmd': 'INSIDE_BTN_FRONT',
             'inside_button_expected_result': 'INSIDE_BTN_DONE',
+
             'destination_task_cmd': 'DESTINATION_UNLOAD',
             'destination_expected_result': 'UNLOAD_DONE',
-            'manipulator_cmd_publish_count': ParameterValue(
-                amr_manipulator_cmd_publish_count,
-                value_type=int,
-            ),
-            'manipulator_cmd_republish_interval_sec': ParameterValue(
-                amr_manipulator_cmd_republish_interval_sec,
-                value_type=float,
-            ),
-            'require_manipulator_active_state_before_result': ParameterValue(
-                amr_require_manipulator_active_state_before_result,
-                value_type=bool,
-            ),
+
+            # 반복 발행 관련 파라미터는 제거함.
+            # 새 indoor_students_manager.py는 명령을 정확히 1회만 발행한다.
             'manipulator_task_timeout_sec': ParameterValue(
                 amr_manipulator_task_timeout_sec,
                 value_type=float,
@@ -227,7 +191,6 @@ def generate_launch_description():
     # =========================================================
     # Stable startup order
     # =========================================================
-    # Same all-in-one structure as manipulator_all_in_one_v2.launch.py:
     #   0 sec  : manipulator_moveit / moveit_core.launch.py
     #   3 sec  : manipulator_manager / manipulator_task_system_v3_student.launch.py
     #   5 sec  : camera_perception_pkg / manipulator_perception.launch.py
@@ -239,9 +202,6 @@ def generate_launch_description():
         declare_prepress_config,
         declare_task_config,
         declare_amr_manipulator_task_timeout_sec,
-        declare_amr_manipulator_cmd_publish_count,
-        declare_amr_manipulator_cmd_republish_interval_sec,
-        declare_amr_require_manipulator_active_state_before_result,
 
         LogInfo(msg='[all_in_one] Launching manipulator all-in-one system'),
 
