@@ -51,7 +51,7 @@ def generate_launch_description():
     default_params_file = os.path.join(
         get_package_share_directory('amr_navigator'),
         'params',
-        'nav2_params.yaml'
+        'nav2_params_student.yaml'
     )
 
     map_yaml = LaunchConfiguration('map')
