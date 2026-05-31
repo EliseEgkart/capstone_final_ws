@@ -841,7 +841,6 @@ class ElevatorDeliveryFinalWithManipulator(Node):
             return False
 
         self.get_logger().info(f"LoadMap result: {result.result}")
-        self.clear_costmaps()
         self.spin_sleep(1.0)
         return True
 
@@ -2080,7 +2079,6 @@ class ElevatorDeliveryFinalWithManipulator(Node):
                 return
 
             self.publish_initial_pose(elevator_exit)
-            self.clear_costmaps()
             self.spin_sleep(2.0)
 
             # 13) elevator_exit -> destination: Nav2 이동
