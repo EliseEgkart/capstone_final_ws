@@ -66,7 +66,7 @@ marker_prepress_commander_v2:
     outside_front_standoff_m: 0.035
     outside_front_offset_x: 0.005
     outside_front_offset_y: 0.003
-    outside_front_offset_z: 0.015
+    outside_front_offset_z: 0.017
     outside_front_approach_mode: radial_from_frame
     outside_front_radial_frame: link1
     outside_front_radial_plane: "xy"
