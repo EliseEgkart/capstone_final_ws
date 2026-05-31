@@ -364,7 +364,7 @@ class ElevatorDeliveryFinalWithManipulator(Node):
         self.declare_parameter("sound_enabled", True)
         self.declare_parameter("sound_path", default_sound_path)
         self.declare_parameter("btn_not_perception_sound", "btn_not_perception.mp3")
-        self.declare_parameter("destination_sound", "destination.mp3")
+        self.declare_parameter("destination_sound", "destination_v2.mp3")
         self.declare_parameter("give_snack_sound", "give_snack.mp3")
         self.declare_parameter("robot_for_move_sound", "robot_for_move.mp3")
         self.declare_parameter("starting_bgm_sound", "starting_bgm.mp3")
